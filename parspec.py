@@ -148,6 +148,40 @@ class ParSpec(object):
             raise ValueError("Incorrect data dimensions")
         self._obj.setData(data)
 
+    def build_minimizer(self, centre=None, scales=None):
+        """
+        Build and return a ROOT::TMinimizer object and configure to minimize
+        the negative log likleihood.
+
+        :param centre: [float]
+            override default central values with these
+        :param scales: [float]
+            override default scales with these ones
+        """
+        minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit")
+        minimizer.SetFunction(self._obj)
+
+        if centre is None:
+            centre = self.centralx()
+
+        if scales is None:
+            scales = self.scalesx()
+
+        for par in self.pars():
+            ipar = self.ipar(par)
+            val = centre[ipar]
+            scale = scales[ipar]
+            if scale == 0:
+                scale = 1
+            minimizer.SetVariable(ipar, par, val, scale)
+
+        # When the LL is halved, 1 sigma is reached
+        minimizer.SetErrorDef(0.5)
+        # Default tolerance is 1e-2, seems a bit generous
+        minimizer.SetTolerance(1e-4)
+
+        return minimizer
+
 
 class Source(object):
     """

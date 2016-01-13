@@ -163,7 +163,7 @@ def measure_template(meas, draw=False):
     data = meas.spec(true)
 
     # Builder a ROOT minimizer
-    minimizer = meas.build_minimizer()
+    minimizer = meas.spec.build_minimizer()
 
     # Tell the spectrum to compare to the data when computing the likelihood
     meas.spec.set_data(data)

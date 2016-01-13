@@ -212,29 +212,3 @@ class TemplateMeasurement(object):
         if builder is None:
             builder = self.prepare()
         self.spec = builder.build()
-
-    def build_minimizer(self):
-        """
-        Build and return a ROOT::TMinimizer object and configure to minimize
-        the negative log likleihood.
-        """
-        minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit")
-        minimizer.SetFunction(self.spec._obj)
-
-        centre = self.spec.centralx()
-        scales = self.spec.scalesx()
-        for par in self.spec.pars():
-            ipar = self.spec.ipar(par)
-            val = centre[ipar]
-            scale = scales[ipar]
-            if scale == 0:
-                scale = 1
-            minimizer.SetVariable(ipar, par, val, scale)
-
-        # When the LL is halved, 1 sigma is reached
-        minimizer.SetErrorDef(0.5)
-        # Default tolerance is 1e-2, seems a bit generous
-        minimizer.SetTolerance(1e-4)
-
-        return minimizer
-
