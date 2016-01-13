@@ -557,8 +557,21 @@ class SpecBuilder(object):
 
         # Write out the generated code
         code_file = 'comp_parspec_%s.cxx' % self.name
-        with open(code_file, 'w') as fout:
-            fout.write(code)
+        code_exists = False
+
+        # First, check if identical file exists, in which case it might already
+        # be compiled, and no need to re-compile
+        try:
+            with open(code_file, 'r') as fin:
+                old_code = fin.read()
+                if old_code == code:
+                    code_exists = True
+        except IOError:
+            pass
+
+        if not code_exists:
+            with open(code_file, 'w') as fout:
+                fout.write(code)
 
         # Ask ROOT to compile and link the code
         prev_level = ROOT.gErrorIgnoreLevel
