@@ -142,11 +142,10 @@ class TemplateMeasurement(object):
         """
         self._lumi = (nominal, nominal-err, nominal+err)
 
-    def build(self):
+    def prepare(self):
         """
-        Build the ParSpec object for this templated measurement.
+        Prepare and return the builder for the spectrum.
         """
-
         builder = parspec.SpecBuilder(self._name)
         uses_lumi = False
 
@@ -204,6 +203,14 @@ class TemplateMeasurement(object):
                 raise RuntimeError("No luminosity uncertainty set")
             builder.set_prior('lumi', *self._lumi)
 
+        return builder
+
+    def build(self, builder=None):
+        """
+        Build the ParSpec object for this templated measurement.
+        """
+        if builder is None:
+            builder = self.prepare()
         self.spec = builder.build()
 
     def build_minimizer(self):
