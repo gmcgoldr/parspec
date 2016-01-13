@@ -95,7 +95,7 @@ def build_template_meas():
     # Add a template (the parameter of interest). Increases contents of two
     # bins, so it doesn't look much like backgrounds and systs. The impact is
     # enhanced by a factor of 5.
-    src_sig.add_template('p', [0, 0, 100, 500, 0], ['p'], [5])
+    src_sig.add_template('0.5*p', [0, 0, 100, 500, 0], ['p'], [0.5])
 
     # Add a flat-ish background (different shape from signal)
     src_bg1 = meas.new_source('bg1', [600, 500, 600, 500, 600])
@@ -147,7 +147,7 @@ def measure_template(meas, draw=False):
     true = meas.spec.centralx()
     true[constrained] += np.random.normal(0, scales[constrained])
     # Also choose a random signal strength (unconstrained parameter)
-    true[meas.spec.ipar('p')] = np.random.uniform(-3, 3)
+    true[meas.spec.ipar('p')] = np.random.uniform(-2, 2)
 
     # Store true values for parameters
     for par in meas.spec.pars():
