@@ -205,7 +205,7 @@ class Source(object):
     def set_expression(self, expr, pars=None, grads=None, polarity=''):
         """
         Set an expression whose value will be used to scale this source. The
-        expression will be compiled in C++, with the cmath library.
+        expression will be compiled in C++, with the cmath and limits headers.
 
         Provide the parameters used in the expression, and the gradient of
         the expressiont w.r.t. to each parameter.

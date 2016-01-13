@@ -1,6 +1,8 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 #include <Math/IFunction.h>
 
