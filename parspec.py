@@ -88,18 +88,6 @@ class ParSpec(object):
         scales = np.fabs(scales[:, 0] - scales[:, 1])/2
         return scales
 
-    def set_centre(self, par, value):
-        """
-        Set the central value for a parameter. Note that this has no bearing on
-        the spectrum code, it impacts only the value returned by `centralx()`.
-
-        :param par: str or int
-            parameter name or index
-        :param value: float
-            central value for the parameter
-        """
-        self._centralx[self._make_ipar(par)] = value
-
     def get_scale(self, par, pol=''):
         """
         Get the scale for a parameter. If no scale is set, returns 0.
@@ -587,7 +575,7 @@ class SpecBuilder(object):
 
         # Tell the spectrum about the central value of constrained parameters
         for par in self._priors:
-            spec.set_centre(par, self._priors[par][0])
+            spec._centralx[spec._make_ipar(par)] = self._priors[par][0]
             # Use scales if prior is constrained
             if self._priors[par][1] is not None:
                 spec._scales[spec._make_ipar(par)] = [
