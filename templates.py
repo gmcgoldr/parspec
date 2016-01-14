@@ -69,7 +69,7 @@ class TemplateSource(object):
             this shape applies only if the systematic parameter is positive
             for 'up', or negative for 'down'
         """
-        if polarity is not None and polarity not in {'up', 'down'}:
+        if polarity is not None and polarity not in ['up', 'down']:
             raise ValueError("Unrecognized polarity %s" % polarity)
         # Make a numpy array from the data for manipulation
         data = np.array(data)

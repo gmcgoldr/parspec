@@ -40,6 +40,7 @@ class ParSpec(object):
         self.name = name
         self._pars = pars[:]
         self._ipars = {par: i for i, par in enumerate(pars)}
+        self._ipars = dict([(par, i) for i, par in enumerate(pars)])
         self._ncols = ncols
         self._npars = len(self._pars)
         self._obj = constructor()
@@ -446,7 +447,7 @@ class SpecBuilder(object):
         """
 
         pars = sorted(list(self._pars))
-        ipars = {par: i for i, par in enumerate(pars)}
+        ipars = dict([(par, i) for i, par in enumerate(pars)])
 
         code = _base_code
 
