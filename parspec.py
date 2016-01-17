@@ -39,7 +39,6 @@ class ParSpec(object):
         """
         self.name = name
         self._pars = pars[:]
-        self._ipars = {par: i for i, par in enumerate(pars)}
         self._ipars = dict([(par, i) for i, par in enumerate(pars)])
         self._ncols = ncols
         self._npars = len(self._pars)
