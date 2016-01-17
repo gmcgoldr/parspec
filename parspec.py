@@ -466,53 +466,30 @@ class SpecBuilder(object):
                 'const unsigned _istats = %d;' %
                 ipars[self._stat_pars[0]])
 
-        code_spec = list()   # code computes the spectrum
-        code_gspec = list()  # code computes the spectrum and gradients
-        
+        code_factors = list()
+        code_usestats = list()
+        code_rowpars = list()
+        code_rownpars = list()
+        code_pargrads = list()
+
         # Write code to sum each source
         for irow, source in enumerate(self._sources):
             # Expression to evaluate source factor
-            factor = source._expr if source._expr else '1'
-            # Sum each source column with the factor into the spectrum
-            code_spec.append('for (unsigned i = 0; i < _ncols; i++) {')
-            # Source values (array on stack, in the scope of the loop)
-            code_spec.append(
-                '  const double _cols[] = {%s};' % (
-                ', '.join(['%.7e' % v for v in source._data])))
-            # The value to add to this spectrum column (scale by stat factor
-            # if this source has statistical uncertainty)
-            code_spec.append(
-                '  const double val = _cols[i] * %s;' % (
-                '_stats[i]' if source._use_stats else '1'))
-            # Sum into the spetrum, with the source factor
-            code_spec.append('  _spec[i] += (%s) * val;' % factor)
-            # Use those lines of code in gradient computation as well
-            code_gspec += code_spec[-4:]
+            code_factors.append(source._expr if source._expr else '1')
+            code_usestats.append('1' if source._use_stats else '0')
+            code_rownpars.append(0)
             # Add code to compute gradients of each spectrum bin w.r.t to
             # the parameters in the factor expression for this source
             for par, grad in zip(source._pars, source._grads):
-                # Compute db/dp, b is the bin value, p is the parameter 
-                code_gspec.append(
-                    '  _grads[%d*_ncols+i] += (%s) * val;' %  (
-                    ipars[par], grad))
-            # If the source contributes to statistical uncertainty, also
-            # compute db/ds, s is the statistical factor
-            if source._use_stats:
-                code_gspec.append(
-                    '  _grads[(_istats+i)*_ncols+i] += (%s) * _cols[i];' %
-                    factor)
-            # Close the column loop
-            code_spec.append('}')
-            code_gspec.append(code_spec[-1])
-        # When computing just the spectrum, don't allow contents to drop below 0
-        code_spec.append(
-            'for (unsigned i = 0; i < _ncols; i++) '
-            '_spec[i] = std::max(0., _spec[i]);')
-        # When computing gradients, cap at 1 to avoid nan (Poisson uncertainty
-        # is skewed at low numbers, but it certainly can't be 0)
-        code_gspec.append(
-            'for (unsigned i = 0; i < _ncols; i++) '
-            '_spec[i] = std::max(1., _spec[i]);')
+                code_rownpars[-1] += 1
+                code_rowpars.append(str(ipars[par]))
+                code_pargrads.append(grad)
+
+        code_factors = ',\n'.join(code_factors)
+        code_usestats = ', '.join(code_usestats)
+        code_rowpars = ', '.join(code_rowpars)
+        code_rownpars = ', '.join(map(str, code_rownpars))
+        code_pargrads = ',\n'.join(code_pargrads)
 
         code_ll = list()   # code computes the log likelihood
         code_gll = list()  # code computes the log likelihood and gradients
@@ -567,16 +544,25 @@ class SpecBuilder(object):
             code_gll.append(code_ll[-1])
             for par, grad in zip(rpars, rgrads):
                 code_gll.append('_df[%d] += %s;' % (ipars[par], grad))
-    
+
         # Substitue generated code into the template
         code = code.replace('__NAME__', self.name)
-        code = code.replace('__NDIMS__', str(len(pars)))
+        code = code.replace('__NROWS__', str(len(self._sources)))
         code = code.replace('__NCOLS__', str(self._ncols))
+        code = code.replace('__NDIMS__', str(len(pars)))
         code = code.replace('__PARS__', '\n%s\n' % ('\n'.join(code_pars)))
-        code = code.replace('__SPEC__', '\n%s\n' % ('\n'.join(code_spec)))
+        code = code.replace('__FACTORS__', '\n%s\n' % code_factors)
+        code = code.replace('__USESTATS__', '\n%s\n' % code_usestats)
+        code = code.replace('__PARGRADS__', '\n%s\n' % code_pargrads)
+        code = code.replace('__ROWNPARS__', '\n%s\n' % code_rownpars)
+        code = code.replace('__ROWPARS__', '\n%s\n' % code_rowpars)
         code = code.replace('__LL__', '\n%s\n' % ('\n'.join(code_ll)))
-        code = code.replace('__GSPEC__', '\n%s\n' % ('\n'.join(code_gspec)))
         code = code.replace('__GLL__', '\n%s\n' % ('\n'.join(code_gll)))
+
+        sources_data = ',\n'.join([
+            ', '.join(['%.7e' % v for v in s._data])
+            for s in self._sources])
+        code = code.replace('__SOURCES__', sources_data)
 
         # Write out the generated code
         code_file = 'comp_parspec_%s.cxx' % self.name

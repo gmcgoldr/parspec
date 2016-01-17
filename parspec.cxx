@@ -19,6 +19,8 @@
  */
 class __NAME__ : public ROOT::Math::IGradientFunctionMultiDim {
 private:
+  static const double _sources[];
+  static const unsigned _nrows = __NROWS__;
   static const unsigned _ncols = __NCOLS__;
   static const unsigned _ndims = __NDIMS__;
   bool _negative;
@@ -39,10 +41,21 @@ public:
   /** Compute the spectrum for the given parameters */
   void Compute(const double* _x, double* _spec) const {
     std::memset(_spec, 0, _ncols*sizeof(double));
-    // Assign parameter values to nammed variables
+    // Assign parameter values to named variables
     __PARS__
+    // Compute factors for each source
+    const double _factors[] = { __FACTORS__ };
+    const bool _usestats[] = { __USESTATS__ };
     // Compute spectrum without gradients
-    __SPEC__
+    for (unsigned _i = 0; _i < _nrows; _i++)
+      for (unsigned _j = 0; _j < _ncols; _j++)
+        _spec[_j] += 
+            _factors[_i] * 
+            (_usestats[_i] ? _stats[_j] : 1) * 
+            _sources[_i*_ncols+_j];
+    // Don't allow contents to drop below 0
+    for (unsigned _j = 0; _j < _ncols; _j++)
+      _spec[_j] = std::max(0., _spec[_j]);
   }
 
   ROOT::Math::IBaseFunctionMultiDim* Clone() const {
@@ -59,8 +72,40 @@ public:
     std::memset(_df, 0, _ndims*sizeof(double));
     // Assign parameter values to nammed variables
     __PARS__
-    // Compute the spectrum and gradient of each bin w.r.t. parameters
-    __GSPEC__
+    // Compute factors for each source
+    const double _factors[] = { __FACTORS__ };
+    // Indicates which rows are affected by statistical uncertainties
+    const bool _usestats[] = { __USESTATS__ };
+    // The number of parameters affecting each row
+    const unsigned _rownpars[] = { __ROWNPARS__ };
+    // List of parameter indices for each row
+    const unsigned _rowpars[] = { __ROWPARS__ };
+    // Gradient of the likelihood w.r.t. each paraemeter
+    const double _pargrads[] = { __PARGRADS__ };
+    unsigned _ipars = 0;
+    // Compute spectrum without gradients
+    for (unsigned _i = 0; _i < _nrows; _i++) {
+      for (unsigned _j = 0; _j < _ncols; _j++) {
+        _spec[_j] += 
+            _factors[_i] * 
+            (_usestats[_i] ? _stats[_j] : 1) * 
+            _sources[_i*_ncols+_j];
+        if (_usestats[_i])
+          _grads[(_istats+_j)*_ncols+_j] += 
+              _factors[_i] * 
+              _sources[_i*_ncols+_j];
+        for (unsigned _k = 0; _k < _rownpars[_i]; _k++)
+          _grads[_rowpars[_ipars+_k]*_ncols+_j] += 
+              _pargrads[_ipars+_k] *
+              (_usestats[_i] ? _stats[_j] : 1) * 
+              _sources[_i*_ncols+_j];
+      }
+      _ipars += _rownpars[_i];
+    }
+    // Don't allow values below 1, 0 would result in nan when computing
+    // Poisson likelihoods
+    for (unsigned _j = 0; _j < _ncols; _j++)
+      _spec[_j] = std::max(1., _spec[_j]);
     // Compute the log likelihood and gradient of ll w.r.t. parameters
     __GLL__
     if (_negative) {
@@ -95,4 +140,8 @@ private:
     if (_negative) _f *= -1;
     return _f;
   }
+};
+
+const double __NAME__::_sources[] = { 
+__SOURCES__
 };
