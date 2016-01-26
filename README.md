@@ -8,7 +8,7 @@ Many physics analysis require measuring the likelihood of a set of parameters, g
 
 The likelihood computation can be very expensive, and typically needs to be run a very large number of times such as during minimization.
 
-Given these two points, this package aims to provide a convenient python interface to the common mechanics relied on by nearly all binned analysis, while running the heavy computation in efficient compiled code.
+Given these two points, this package aims to provide a convenient python interface to the common mechanics relied on by nearly all binned analysis, while running the heavy computation in efficient compiled code. The gradients of the log likelihood are computed analytically, reducing the time required to perform a minimization by a factor proportional to the number of parameters.
 
 The package also provides a higher level interface to the base mechanics, re-expressing the base functionality in the paradigms of template and unfolding analyses.
 
@@ -23,6 +23,14 @@ Systematic variations to a source are treated in the same way as a template: a s
 The row factors are aribtrary expressions of parameters. Parameters can be shared accross many row factors; for example, a luminosity parameter can be added to the factor for all rows subject to luminosity scaling.
 
 A single "statistical parameter" is introduced for each column, allowing to indepdently change the net number of events in each spectrum bin to account for statistical fluctuations in the sources. In theory, each bin of the matrix should get its own statistical parameter such that statistical fluctuations in a given source can be correctly correlated to the scaling factor for that source. However, this serves as a decent approximation.
+
+### Log likelihood ###
+
+Building the expected spectrum given a set of parameters is only half the battle. Typically, it is then necessary to evaluate how well those parameters correspond to the observed spectrum. The spectrum also has the ability to evaluate the log likelihood that its parameters agree with a given data spectrum.
+
+This is computed by approximating the Poisson probability that the observed number of events in a bin arose from the expected one (computed using a set of parameters). Then, a regularization penalty is applied to the parameters, and the resulting likelihood can be interpreted as being proportional to the likelihood that the parameters are the true ones, given the obsered data (as per Bayes' theorem).
+
+This computation also keeps track of the gradient of the log likelihood with respect to each parameter. The C++ object which is responsible for carrying out this computations implements the `ROOT::Math::IGradientMultiDim` interface. Thus, it can be used directly with the `ROOT` minimization framework.
 
 ### Note on the compiled code ###
 
