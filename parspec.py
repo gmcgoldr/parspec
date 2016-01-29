@@ -48,7 +48,7 @@ class ParSpec(object):
 
     def _prep_pars(self, x):
         """Use numpy to get an array of parameter values, ensuring ndims"""
-        x = np.array(x, dtype=np.float64)
+        x = np.asarray(x).astype(np.float64)
         if len(x) != self._npars:
             raise ValueError("Incorrect paramter dimensions")
         return x
@@ -177,8 +177,7 @@ class ParSpec(object):
 
         # When the LL is halved, 1 sigma is reached
         minimizer.SetErrorDef(0.5)
-        # Default tolerance is 1e-2, seems a bit generous
-        minimizer.SetTolerance(1e-4)
+        minimizer.SetTolerance(1e-2)
 
         return minimizer
 
