@@ -5,7 +5,9 @@ import parspec
 
 class TemplateSource(object):
     """
-    Accumulate information for a source process to the spectrum.
+    Accumulate information for a source process to the spectrum. Note that by
+    convention, low and high refer to absolute values, whereas down and up
+    refer to differences relative to the central value.
     """
 
     def __init__(self, name, data):
@@ -19,26 +21,26 @@ class TemplateSource(object):
             distribution contributing to spectrum
         """
         self._name = name
-        self._data = data
+        self._data = np.array(data)
         self._lumi = False
-        self._stats = False
+        self._stat_errs = list()
         self._xsec = tuple()
         self._systematics = list()
         self._templates = list()
 
-    def set_xsec(self, nominal, down=None, up=None):
+    def set_xsec(self, nominal, low=None, high=None):
         """
-        Assign a cross seciton parameter for this source. If the up and down
+        Assign a cross seciton parameter for this source. If the low and high
         uncertainties aren't provided, the parameter won't be regularized.
 
         :param nominal: float
             nominal cross section value
-        :param down: float
+        :param low: float
             cross section value below nominal which causes 1-sigma penalty
-        :param up: float
+        :param high: float
             cross section value above nominal which causes 1-sigma penalty
         """
-        self._xsec = (nominal, down, up)
+        self._xsec = (nominal, low, high)
 
     def use_lumi(self):
         """
@@ -46,12 +48,15 @@ class TemplateSource(object):
         """
         self._lumi = True
 
-    def use_stats(self):
+    def use_stats(self, errs):
         """
         The data values in this source are subject to statistical uncertainties
         (i.e. the source is simulated with MC).
+
+        :param err: [float]
+            relative statistical error on each bin
         """
-        self._stats = True
+        self._stat_errs = list(errs)
 
     def add_syst(self, name, data, polarity=None):
         """
@@ -60,22 +65,21 @@ class TemplateSource(object):
         introduced in another source). This parameter is regularized such that
         the loglikelihood is halved when it reaches +/- 1.
 
+        Note: data is given as absolute values, not realtive to nominal.
+
         :param name: str
             name of the systematic parameter (can be shared with other sources)
         :param data: [float]
-            values this systematic adds to nominal data when its value is
-            1-sigma above nominal
+            values of the spectrum when the systematic parameter takes on a
+            value of +/- 1 sigma (depends on given polarity)
         :param polarity: {'up', 'down'}
             this shape applies only if the systematic parameter is positive
             for 'up', or negative for 'down'
         """
         if polarity is not None and polarity not in ['up', 'down']:
             raise ValueError("Unrecognized polarity %s" % polarity)
-        # Make a numpy array from the data for manipulation
-        data = np.array(data)
-        # If the data is for only down values of the systematic, then the
-        # shifts are already negative. But they will be multiplied by the
-        # systematic value, so change polarity now.
+        # Get the shifts realtive to nominal
+        data = np.array(data) - self._data
         if polarity == 'down':
             data *= -1
         self._systematics.append((name, data, polarity))
@@ -86,15 +90,18 @@ class TemplateSource(object):
         spectrum (or re-uses them if they are present in other sources). The
         parameters are not regularized, they are allowed to float.
 
+        Note: data is given as absolute values, not realtive to nominal.
+
         :param expr: str
             C++ expression which yields the normalization for the template
         :param data: [float]
-            values which this template add to nominal data (scale with expr)
+            values of the spectrum when the template expression evaluates to 1
         :param pars: [str]
             names of parameters used in the expression
         :param grads: [str]
             C++ expression which yields the dexpr/dpar for each parameter
         """
+        data = np.array(data) - self._data  # relative to nominal
         self._templates.append((expr, data, pars, grads))
             
 
@@ -113,7 +120,7 @@ class TemplateMeasurement(object):
         """
         self._name = name
         self._sources = dict()  # mapping source names to TemplateSource
-        self._lumi = tuple()  # nominal, down, up prior for luminosity
+        self._lumi = tuple()  # nominal, low, high prior for luminosity
         self.spec = None  # ParSpec object
 
     def new_source(self, name, data):
@@ -147,7 +154,7 @@ class TemplateMeasurement(object):
         Prepare and return the builder for the spectrum.
         """
         builder = parspec.SpecBuilder(self._name)
-        uses_lumi = False
+        uses_lumi = False  # determine if lumi is needed from sources
 
         for temp_src in self._sources.values():
             par_src = parspec.Source(temp_src._data)
@@ -170,8 +177,8 @@ class TemplateMeasurement(object):
                 # Factor is just xsec, derivative is inferred
                 par_src.set_expression(xsec_name)
 
-            if temp_src._stats:
-                par_src.use_stats()
+            if temp_src._stat_errs:
+                par_src.use_stats(temp_src._stat_errs)
 
             builder.add_source(par_src)
 

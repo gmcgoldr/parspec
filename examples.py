@@ -1,16 +1,19 @@
 from __future__ import division
+import warnings
 
 import numpy as np
 from matplotlib import pyplot as plt
-# Try to set a nicer style for matplotlib, only for version > 1.5
-_vmpl = list(map(int, plt.matplotlib.__version__.split('.')))
-if _vmpl[0] > 1 or (_vmpl[0] == 1 and _vmpl[1] >= 5):
-    plt.style.use('ggplot')
+import ROOT
 
 import npinterval
 from pymcmc import MCMC
 
 import templates
+
+# Try to set a nicer style for matplotlib, only for version > 1.5
+_vmpl = list(map(int, plt.matplotlib.__version__.split('.')))
+if _vmpl[0] > 1 or (_vmpl[0] == 1 and _vmpl[1] >= 5):
+    plt.style.use('ggplot')
 
 
 def draw_point_hist(y, x=None, **kwargs):
@@ -80,35 +83,35 @@ def build_template_meas():
     meas = templates.TemplateMeasurement()
     meas.set_lumi(1, 0.02)
 
-    # Add a signal source. The vector is its distribution, could be a TH1 (any
-    # iterable object)
-    src_sig = meas.new_source('sig', [1000, 1500, 2000, 1500, 1000])
+    # Base shape for the signal, triangular distribution
+    base = np.array([10000, 12500, 15000, 12500, 10000], dtype=float)
+    # Add a source for the signal
+    src_sig = meas.new_source('sig', base)
     src_sig.use_lumi()  # impacted by luminosity
-    src_sig.use_stats()  # underyling values subject to uncertainty
-    src_sig.set_xsec(1, 0.99, 1.05)  # cross section constrained to +5%/-1%
-    # Add fully asymmetric systematic uncertainty (same impact at +/-1 sigma)
-    src_sig.add_syst('s1', [0, 100, 100, 100, 0], 'up')
-    src_sig.add_syst('s1', [0, 100, 100, 100, 0], 'down')
-    # Add a symmetric systematic uncertainty (modifies spectrum by a flat
-    # positive slope when s2 is positive)
-    src_sig.add_syst('s2', [-200, -100, 0, 100, 200])
-    # Add a template (the parameter of interest). Increases contents of two
-    # bins, so it doesn't look much like backgrounds and systs. The impact is
-    # enhanced by a factor of 5.
-    src_sig.add_template('0.5*p', [0, 0, 100, 500, 0], ['p'], [0.5])
+    src_sig.use_stats(1./(10*base**0.5))  # stat unc. from 10x MC
+    src_sig.set_xsec(1, 0.95, 1.05)  # cross section constrained to +/-5%
+    # Add a template: under the influence of parameter p, a linear slope is
+    # added to the signal
+    src_sig.add_template('p', base*[0.8, 0.9, 1, 1.1, 1.2])
+    # Add highly asymmetric systematic uncertainty which looks a lot like the
+    # signal. This is a challenging model to fit.
+    src_sig.add_syst('s1', base*[0.94, 0.98, 1, 1.02, 1.06], 'up')
+    src_sig.add_syst('s1', base*[0.97, 0.99, 1, 1.01, 1.03], 'down')
+    # Add another systematic which doesn't look like the signal or the data
+    # (should be constrained)
+    src_sig.add_syst('s2', base*[1.02, 1.01, 1, 1.01, 1.02])
 
     # Add a flat-ish background (different shape from signal)
-    src_bg1 = meas.new_source('bg1', [600, 500, 600, 500, 600])
+    base = np.array([1200, 1100, 1000, 1000, 1000], dtype=float)
+    src_bg1 = meas.new_source('bg1', base)
     src_bg1.use_lumi()
-    src_bg1.use_stats()
+    src_bg1.use_stats(1./(10*base)**0.5)
     src_bg1.set_xsec(1, 0.8, 1.1)
-    # Share one of the systematics with the background. Adds to bin 3 when
-    # positive, adds to bin 1 when negative.
-    src_bg1.add_syst('s2', [0, 0, 0, 200, 0], 'up')
-    src_bg1.add_syst('s2', [0, 100, 0, 0, 0], 'down')
+    # It is also impacted by systematic 2
+    src_bg1.add_syst('s2', base*[1.02, 1.01, 1, 1.01, 1.02])
 
     # Add a background not impacted by lumi or stats (e.g. data driven)
-    src_bg2 = meas.new_source('bg2', [200, 200, 200, 200, 200])
+    src_bg2 = meas.new_source('bg2', [1000, 1000, 1000, 1100, 1200])
     src_bg2.set_xsec(1, 0.9, 1.1)
 
     # Build the spectrum object
@@ -117,120 +120,274 @@ def build_template_meas():
     return meas
 
 
+def make_pseudo(meas, systs=True, signal=True, stats=True):
+    """
+    Generate a plausible data spectrum for a pseudo-experiment in which the
+    true underlying parameters are not known.
+
+    :param meas: TemplateMeasurment
+        measurement object whose spectrum is used to generate data
+    :param systs: bool
+        randomize systematic parameter values
+    :param signal: bool
+        randomize the signal value
+    :param stats: bool
+        poisson fluctuate data yields
+    :return: [float], [float]
+        pseudo-data and the true parameter values
+    """
+
+    # Get the scales for the paramters controlling the spectrum
+    scales = meas.spec.scales
+    # Randomize the true underlying values for constrained parameters
+    true = list(meas.spec.central)
+
+    if systs:
+        # Vary the constrained parameters based on their priors
+        for par in meas.spec.pars:
+            if par in meas.spec.unconstrained:
+                continue
+            ipar = meas.spec.ipar(par)
+            true[ipar] += np.random.normal(0, scales[ipar])
+
+    if signal:
+        # Also choose a random signal strength (unconstrained parameter)
+        true[meas.spec.ipar('p')] = np.random.uniform(-1, 1)
+
+    # Build the data spectrum that would be observed for those values
+    data = meas.spec(true)
+
+    if stats:
+        # Poisson fluctuate yields (note that the statistical parameters
+        # acount for fluctuation in simulated yields)
+        data = np.random.poisson(data)
+
+    return data, true
+
+
+def single_fit(meas, randomize=False, nmax=100):
+    """
+    Perform a single fit using TMinuit.
+
+    :param meas: TemplateMeasurement
+        measurment object to fit
+    :param randomize: bool
+        randomize initial starting parameter values
+    :param nmax: int
+        maximum TMinuit fails before aborting
+    :return: [float], float, ROOT.TMinimizer
+        fit parameters, ll and minimizer object used to fit
+    """
+    # Do a vanilla fit (don't randomize parameters)
+    minimizer = meas.spec.build_minimizer()
+
+    if randomize:
+        # Randomize initial values
+        for ipar in range(meas.spec.npars):
+            if meas.spec.scales[ipar] == 0:
+                continue
+            minimizer.SetVariableValue(
+                ipar, 
+                meas.spec.central[ipar] + 
+                np.random.normal(0, meas.spec.scales[ipar]))
+
+    # Attempt the fit, TMinuit will fail sometimes
+    nfails = 0  # keep track of failed fits
+    while not minimizer.Minimize():
+        nfails += 1
+        if nfails >= nmax:
+            raise RuntimeError("Failed minimization")
+
+    minx = [minimizer.X()[i] for i in range(meas.spec.npars)]
+    ll = meas.spec.ll(minx)
+
+    return minx, ll, minimizer
+
+
+def global_fit(meas, ntrials=10, nmax=100):
+    """
+    Perform multiple fits and keep the best minimum.
+
+    :param meas: TemplateMeasurement
+        measurment object to fit
+    :param ntrials: int
+        number of successfull fit attempts from which to find a global minimum
+    :param nmax: int
+        maximum TMinuit fails before aborting
+    :return: [float], float, ROOT.TMinimizer
+        fit parameters, ll and minimizer object used to fit
+    """
+
+    best_x = None  # parameter values at global min
+    best_ll = float('-inf')  # log likelihood at global min
+    best_min = None  # keep minimizer object which reaches best min
+
+    nfits = 0
+    nfails = 0
+
+    while nfits < 10:
+        try:
+            minx, ll, minimizer = single_fit(meas, randomize=True, nmax=1)
+            nfits += 1  # once it succeeds, count the fit
+        except RuntimeError:
+            nfails += 1
+            if nfails >= nmax:
+                raise RuntimeError("Failed global minimization")
+            continue  # if it fails, try again with different randomization
+
+        if ll > best_ll:
+            best_x = minx
+            best_ll = ll
+            best_min = minimizer
+
+    return best_x, best_ll, best_min
+
+
+def run_minos(meas, minimizer):
+    """
+    Find the points along each parameter value where the log likelihood is
+    halved. For a normal distribution, this is the 1-sigma interval containing
+    68.27% of the distribution.
+
+    :param meas: TemplateMeasurement
+        measurement whose spectrum parameters are to be profiled
+    :param minimizer: ROOT.TMinimizer
+        minimier object which has found a minimum
+    :return: [float], [float]
+        distance to subtract and add to halve the log likelihood
+    """
+    # Declare ROOT doubles which minos can write to by reference
+    down = ROOT.Double(0)
+    up = ROOT.Double(0)
+
+    # Lower and upper bounds for the parameters
+    fit_down = [0] * meas.spec.npars
+    fit_up = [0] * meas.spec.npars
+
+    for par in meas.spec.pars:
+        ipar = meas.spec.ipar(par)
+        if minimizer.GetMinosError(ipar, down, up):
+            # Note: important to cast the copy the ROOT variable, otherwise
+            # the list will contain a reference to the value, which will change
+            fit_down[ipar] = float(down)
+            fit_up[ipar] = float(up)
+        else:
+            warnings.warn("Minos failed on %s" % par, RuntimeWarning)
+
+    return fit_down, fit_up
+
+
+def run_mcmc(meas, x, nsamples, covm=None, scales=None):
+    """
+    Sample the likelihood space with a Markov Chain Monte Carlo.
+
+    :param meas: TemplateMeasurement
+        measurement whose spectrum likelihood space is to be probe
+    :param x: [float]
+        parameter values where to start the chain
+    :param covm: [[float]]
+        covariance matrix values if sampling transformed space
+    :param scales: [float]
+        parameter scales if not sampling transformed space
+    :return: [float], [float], [float], pymcmc.MCMC
+        posterior mean, lower CI, upper CI for each parameter, and the MCMC
+        object used for sampling
+    """
+    mcmc = MCMC(meas.spec.npars)
+    mcmc.set_values(x)
+
+    if covm is not None and scales is None:
+        scales, transform = np.linalg.eigh(covm)
+        mcmc.set_transform(transform)
+        mcmc.set_scales(scales**0.5)
+    elif scales is not None:
+        mcmc.set_scales(scales)
+    else:
+        raise ValueError("Must provide covariance OR scales")
+
+    mcmc.rescale = 2  # good starting point
+    mcmc.learn_scale(meas.spec.ll, 1000)
+
+    mcmc.run(meas.spec.ll, nsamples)
+
+    mean = list()
+    mean_down = list()
+    mean_up = list()
+
+    for ipar in range(meas.spec.npars):
+        mean.append(np.mean(mcmc.data[:, ipar]))
+        low, high, _, _ = npinterval.interval(mcmc.data[:, ipar], 0.6827)
+        mean_down.append(low-mean[-1])
+        mean_up.append(high-mean[-1])
+
+    return mean, mean_down, mean_up, mcmc
+
+
 def measure_template(meas, draw=False):
     """
     Generate a fake data spectrum using a template measurement spectrum, and
     randomizing its parameters. Then fit this fake data to see if its true 
     underlying parameters can be recovered.
 
+    :param meas: TemplateMeasurement
+        measurment object to use
+    :param draw: bool
+        draw the fit spectrum
     :return: dict
-        mapping of parameter names to their results, or None if failed
+        map each parameter to various measurement values
     """
 
-    # Map each parameter to a mapping of the following values
-    results = {
-        par: {
-            'true': 0,  # true value used in simulating data
-            'fit': 0,   # MLE from minimization
-            'err': 0,   # uncertainty of minimization
-            'mode': 0,   # Mode of the Bayesian posterior
-            'low': 0,   # lower bound of 68.27% C.L.
-            'high': 0}  # upper bound of 68.27% C.L.
-        for par in meas.spec.pars()}
-
-    # Get the scales for the paramters controlling the spectrum
-    scales = meas.spec.scalesx()
-    # Unconstrained parameters have sacles of 0
-    constrained = (scales > 0)  # list of True if constrained
-
-    # Randomize the true underlying values for constrained parameters
-    true = meas.spec.centralx()
-    true[constrained] += np.random.normal(0, scales[constrained])
-    # Also choose a random signal strength (unconstrained parameter)
-    true[meas.spec.ipar('p')] = np.random.uniform(-2, 2)
-
-    # Store true values for parameters
-    for par in meas.spec.pars():
-        ipar = meas.spec.ipar(par)
-        results[par]['true'] = true[ipar]
-
-    # Show that the only unconstrained parameter is p
-    assert(constrained[meas.spec.ipar('p')] == False)
-    assert(np.sum(~constrained) == 1)
-
-    # Build the data spectrum that would be observed for those values (note
-    # that this includes statistical fluctuations)
-    data = meas.spec(true)
-
-    # Builder a ROOT minimizer
-    minimizer = meas.spec.build_minimizer()
-
-    # Tell the spectrum to compare to the data when computing the likelihood
+    data, true = make_pseudo(meas)
     meas.spec.set_data(data)
-    # Try to minimize, fail at 100 attempts
-    niters = 0
-    while not minimizer.Minimize():
-        niters += 1
-        if niters >= 100:
-            return None
-    # Try to measure covaraince, fail at 100 attempts
-    niters = 0
-    while not minimizer.Hesse():
-        niters += 1
-        if niters >= 100:
-            return None
 
-    # Get the minimization information
-    best = [minimizer.X()[i] for i in range(meas.spec.npars())]
-    errs = [minimizer.Errors()[i] for i in range(meas.spec.npars())]
+    # First fit without randomization
+    fit_first, _, _ = single_fit(meas, randomize=False)
+    # Global fit with randomization to find better minimum
+    minx, ll, minimizer = global_fit(meas, ntrials=10)
+
+    # Compute the covariance matrix, never seen it fail, but warn in case
+    if not minimizer.Hesse():
+        warnings.warn("Failed to compute error marix", RuntimeWarning)
+
+    fit_err = [minimizer.Errors()[i] for i in range(meas.spec.npars)]
+
     covm = np.array([
         [minimizer.CovMatrix(i,j) 
-        for j in range(meas.spec.npars())] 
-        for i in range(meas.spec.npars())])
-
-    # Store minimization values for parameters
-    for par in meas.spec.pars():
-        ipar = meas.spec.ipar(par)
-        results[par]['fit'] = best[ipar]
-        results[par]['err'] = errs[ipar]
+        for j in range(meas.spec.npars)] 
+        for i in range(meas.spec.npars)])
+    
+    # Measure the confidence intervals with minos profiling
+    fit_down, fit_up = run_minos(meas, minimizer)
 
     # Get a better estimate for the confidence intervals with MCMC sampling
-    mcmc = MCMC(meas.spec.npars())
-    # Find a transformation of the parameter space which diagonalizes the
-    # covariance matrix. In this space, each parameter is independent.
-    scales, transform = np.linalg.eigh(covm)
-    # Use this to help the MCMC sample the space more efficiently
-    mcmc.set_transform(transform)
-    # Set the scale of the parameters in the transformed space
-    mcmc.set_scales(scales**0.5)
-    mcmc.rescale = 2  # typically works well
-    # Start the chain at the most likely parameter values  
-    mcmc.set_values(best)
-    # Try to learn the optimal rescale
-    if not mcmc.learn_scale(meas.spec.ll):
-        return None  # failed to converge in 100 steps
-    if mcmc.rescale < 1.5 or mcmc.rescale > 3:
-        return None  # converged to a bad scale, fit was probably bad
+    mean, mean_down, mean_up, mcmc = \
+        run_mcmc(meas, minx, nsamples=1e5, covm=covm)
 
-    # Take 100,000 samples of the space, this seems to give a few percent
-    # variance on the confidence interval
-    mcmc.run(meas.spec.ll, int(1e5))
-    
-    # Store confidence intervals for parameters
-    for par in meas.spec.pars():
+    results = dict()
+    for par in meas.spec.pars:
         ipar = meas.spec.ipar(par)
-        # Estimate the mode of the sampled distribution
-        mode = npinterval.half_sample_mode(mcmc.data[:, ipar])
-        results[par]['mode'] = mode
-        # Find the shortest interval between two samples containing 68%
-        low, high, _, _ = npinterval.interval(mcmc.data[:, ipar], 0.6827)
-        results[par]['low'] = low
-        results[par]['high'] = high
-
+        results[par] = dict()
+        results[par]['true'] = true[ipar]
+        results[par]['fit'] = minx[ipar]
+        results[par]['fit_first'] = fit_first[ipar]
+        results[par]['fit_err'] = fit_err[ipar]
+        results[par]['fit_down'] = fit_down[ipar]
+        results[par]['fit_up'] = fit_up[ipar]
+        results[par]['mean'] = mean[ipar]
+        results[par]['mean_down'] = mean_down[ipar]
+        results[par]['mean_up'] = mean_up[ipar]
+    
     if draw:
-        l0 = draw_point_hist(meas.spec(meas.spec.centralx()), label='nominal')
-        ltrue = draw_point_hist(data, label='true')
-        lfit = draw_point_hist(meas.spec(best), ls='--', label='fit')
+        nominal = meas.spec(meas.spec.central)
+        l0 = draw_point_hist(
+            np.zeros(meas.spec.npars), 
+            label='nominal')
+        ltrue = draw_point_hist(
+            100*(data/nominal-1), 
+            label='true')
+        lfit = draw_point_hist(
+            100*(meas.spec(minx)/nominal-1), 
+            ls='--', label='fit')
         plt.legend(handles=[l0, ltrue, lfit])
         ylims = plt.ylim()
         yrange = ylims[1] - ylims[0]
@@ -241,42 +398,51 @@ def measure_template(meas, draw=False):
     return results
 
 
-def draw_spectra(meas):
+def draw_spectra(meas, normalize=True):
     """
-    Draw the spectrum from a measurement object with parameter values set at 
-    +/-1 sigma values.
+    Draw a spectrum with a parameter fluctuated to +/- 1 sigma, for each
+    parameter. Unconstrained parameters are set to +/- 1.
+
+    :param meas: TemplateMeasurement
+        measurement from which to draw the spctrum
+    :param normalize: bool
+        normalize fluctuated spectrum to the nominal one
     """
 
-    for par in meas.spec.pars():
+    for par in meas.spec.pars:
         ipar = meas.spec.ipar(par)
+        info = meas.spec.parinfo(par)
 
-        scale_up = meas.spec.get_scale(par, 'up')
-        scale_down = meas.spec.get_scale(par, 'down')
-
-        # Get the central values for the parameters
-        point = meas.spec.centralx()
+        x = list(meas.spec.central)  # point where to draw spectrum
 
         # Draw a histogram of the spectrum with the central parameter values
-        l0 = draw_point_hist(meas.spec(point), label='nominal')
+        nominal = meas.spec(x)
+        l0 = draw_point_hist(
+            nominal if not normalize else np.zeros(len(nominal)),
+            label='nominal')
+
+        # Get the central values for the parameters
+        low = info['low']
+        high = info['high']
         
-        # Set the scale of unconstrained parameters to +/- 1
-        if scale_up == scale_down == 0:
-            scale_up = 1
-            scale_down = -1
+        # If the parameter is unconstrained, set its draw range to unity
+        if low == high:
+            low = info['central'] - 1
+            high = info['central'] + 1
 
         # Shift the value for the current parameter to +1 and draw
-        point[ipar] = scale_up
-        lup = draw_point_hist(
-            meas.spec(point),
+        x[ipar] = high
+        lhigh = draw_point_hist(
+            meas.spec(x) if not normalize else 100*(meas.spec(x)/nominal-1),
             label=r'%s = +1$\sigma$' % par)
 
-        # Again at -1 (scaled)
-        point[ipar] = scale_down
-        ldown = draw_point_hist(
-            meas.spec(point),
+        # Shift to -1 and draw
+        x[ipar] = low
+        llow = draw_point_hist(
+            meas.spec(x) if not normalize else 100*(meas.spec(x)/nominal-1),
             label=r'%s = -1$\sigma$' % par)
 
-        plt.legend(handles=[l0, lup, ldown])
+        plt.legend(handles=[l0, lhigh, llow])
 
         ylims = plt.ylim()
         yrange = ylims[1] - ylims[0]
@@ -287,32 +453,68 @@ def draw_spectra(meas):
 
 
 if __name__ == '__main__':
+    print("Building measurement...")
     meas = build_template_meas()
 
     print("Fitting templates...")
-
-    results = None
-    while not results:
-        print("Attempting a fit...")
-        results = measure_template(meas, draw=True)
-
-    print('%15s  %6s  %6s  %6s  %6s  %6s  %6s' % (
+    results = measure_template(meas, draw=True)
+    print(('%15s'+'  %6s'*9) % (
         "Parameter", 
         "True", 
         "Fit", 
+        "First", 
         "Err", 
-        "Mode",
-        "Low", 
-        "High"))
-
-    for par in meas.spec.pars():
-        print('%15s  %+6.3f  %+6.3f  %+6.3f  %+6.3f  %+6.3f  %+6.3f' % (
+        "Down", 
+        "Up", 
+        "Mean",
+        "Down", 
+        "Up"))
+    for par in meas.spec.pars:
+        print(('%15s'+'  %+6.3f'*9) % (
             par, 
             results[par]['true'],
             results[par]['fit'],
-            results[par]['err'],
-            results[par]['mode'],
-            results[par]['low'],
-            results[par]['high']))
+            results[par]['fit_first'],
+            results[par]['fit_err'],
+            results[par]['fit_down'],
+            results[par]['fit_up'],
+            results[par]['mean'],
+            results[par]['mean_down'],
+            results[par]['mean_up']))
 
+    print("Drawing spectrum...")
     draw_spectra(build_template_meas())
+
+    print("Running pseudo-experiments...")
+    print("Warning: this will take around 1 hour")
+    with open('trials.csv', 'w') as fout:
+        fout.write(', '.join([
+            "True", 
+            "Fit", 
+            "First", 
+            "Err", 
+            "Down", 
+            "Up", 
+            "Mean",
+            "Down", 
+            "Up"]))
+        fout.write('\n')
+        fout.flush()
+        for itrial in range(1000):
+            try:
+                results = measure_template(meas, draw=False)
+            except RuntimeError:
+                print("Measurement failed")
+                continue
+            fout.write(', '.join(map(str, [
+                results['p']['true'],
+                results['p']['fit'],
+                results['p']['fit_first'],
+                results['p']['fit_err'],
+                results['p']['fit_down'],
+                results['p']['fit_up'],
+                results['p']['mean'],
+                results['p']['mean_down'],
+                results['p']['mean_up']])))
+            fout.write('\n')
+            fout.flush()

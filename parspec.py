@@ -21,12 +21,16 @@ _base_code = _load_code()
 
 class ParSpec(object):
     """
-    Wrapper for a constructed parameterized spectrum.
+    Wrapper for a constructed parameterized spectrum. The object has a compiled
+    C++ object which cannot be modified. Access to internals are not mutable to
+    reflect this situation. Can't change a value without realizing it will have
+    no impact on the spectrum.
     """
 
-    def __init__(self, name, pars, ncols, constructor):
+    def __init__(self, name, pars, ncols, central, lows, highs, obj):
         """
-        Build a new compiled spectrum object, and wrap it.
+        Wrapper for a compile parameterized spectrum object. All interals are
+        set at initialization, and are no longer modified.
 
         :param name: str
             name of the object (library and class use this)
@@ -34,17 +38,30 @@ class ParSpec(object):
             list of parameter names, in the order they are used in the object
         :param ncols: int
             number of columns in the spectrum
-        :param constructor: function
-            constructor for the object
+        :param central: [float]
+            central value for each parameter
+        :param lows: [float]
+            -1 sigma value of each parameter
+        :param highs: [float]
+            +1 sigma value of each parameter
+        :param obj: ROOT.name
+            ROOT wrapper for the compiled C++ spectrum object
         """
-        self.name = name
-        self._pars = pars[:]
+        self._name = name
+        self._pars = tuple(pars)
         self._ipars = dict([(par, i) for i, par in enumerate(pars)])
-        self._ncols = ncols
         self._npars = len(self._pars)
-        self._obj = constructor()
-        self._centralx = np.zeros(self._npars, dtype=np.float64)
-        self._scales = [[0, 0] for _ in range(self._npars)]
+        self._ncols = ncols
+        self._obj = obj
+        # Note: used internally, don't return as it is mutable
+        self._bounds = np.array([lows, highs], dtype='float64').T
+        self._central = tuple(np.array(central, dtype='float64'))
+        self._scales = tuple(0.5 * (self._bounds[:, 1] - self._bounds[:, 0]))
+        self._unconstrained = tuple(
+            [p for i, p in enumerate(self._pars) 
+            if self._scales[i] == 0])
+        # At this point, it's worth ensuring that all scales are posiitve
+        assert(not np.any(np.array(self._scales) < 0))
 
     def _prep_pars(self, x):
         """Use numpy to get an array of parameter values, ensuring ndims"""
@@ -60,13 +77,40 @@ class ParSpec(object):
         else:
             return self._ipars[par]
 
-    def pars(self):
-        """Return a copy of the parameter list"""
-        return self._pars[:]
+    @property
+    def name(self):
+        """Return name of spectrum object, used for its class"""
+        return self._name
 
+    @property
+    def pars(self):
+        """Return list of parameter names, in order of indices"""
+        return self._pars
+
+    @property
     def npars(self):
-        """Quick access to the number of parameters"""
+        """Return the number of parameters controlling the spectrum"""
         return self._npars
+
+    @property
+    def ncols(self):
+        """Return the number of columns (bins) in the spectrum"""
+        return self._ncols
+
+    @property
+    def central(self):
+        """Return list of central parameter values"""
+        return self._central
+
+    @property
+    def scales(self):
+        """Return list of parameter scales (symmetrized constraints)"""
+        return self._scales
+
+    @property
+    def unconstrained(self):
+        """Return list of unconstrained parameter names"""
+        return self._unconstrained
 
     def ipar(self, par):
         """
@@ -77,32 +121,26 @@ class ParSpec(object):
         """
         return self._ipars[par]
 
-    def centralx(self):
-        """Return the central parameter values"""
-        # Copy so that in-place edits aren't accidentally stored
-        return np.copy(self._centralx)
-
-    def scalesx(self):
-        """Return the symmetrized scale for each parameter"""
-        scales = np.array(self._scales, dtype=float)
-        scales = np.fabs(scales[:, 0] - scales[:, 1])/2
-        return scales
-
-    def get_scale(self, par, pol=''):
+    def parinfo(self, par):
         """
-        Get the scale for a parameter. If no scale is set, returns 0.
+        Get the information associated with a parameter.
 
         :param par: str or int
             parameter name or index
-        :param pol: str
-            polarity to return one of 'up', 'down' or nothing for symmetric
+        :return: dict
+            index: index of the parameter
+            name: name of the parameter
+            central: prior central value
+            low: prior -1 sigma value
+            high: prior +1 sigma value
         """
-        if not pol or pol == 'up':
-            return self._scales[self._make_ipar(par)][1]
-        elif pol == 'down':
-            return self._scales[self._make_ipar(par)][0]
-        else:
-            raise ValueError("Unknown polarity value: %s" % pol)
+        ipar = self._make_ipar(par)
+        return {
+            'index': ipar,
+            'name': self.pars[ipar],
+            'central': self.central[ipar],
+            'low': self._bounds[ipar, 0],
+            'high': self._bounds[ipar, 1]}
 
     def __call__(self, x):
         """
@@ -143,17 +181,18 @@ class ParSpec(object):
         :param data: [float]
             list of data values for each column
         """
-        data = np.array(data, dtype=np.float64)
+        data = np.asarray(data).astype('float64')
         if len(data) != self._ncols:
             raise ValueError("Incorrect data dimensions")
+        # Note that _obj copies the memory
         self._obj.setData(data)
 
-    def build_minimizer(self, centre=None, scales=None):
+    def build_minimizer(self, central=None, scales=None):
         """
         Build and return a ROOT::TMinimizer object and configure to minimize
         the negative log likleihood.
 
-        :param centre: [float]
+        :param central: [float]
             override default central values with these
         :param scales: [float]
             override default scales with these ones
@@ -161,15 +200,15 @@ class ParSpec(object):
         minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit")
         minimizer.SetFunction(self._obj)
 
-        if centre is None:
-            centre = self.centralx()
+        if central is None:
+            central = self.central
 
         if scales is None:
-            scales = self.scalesx()
+            scales = self.scales
 
-        for par in self.pars():
+        for par in self.pars:
             ipar = self.ipar(par)
-            val = centre[ipar]
+            val = central[ipar]
             scale = scales[ipar]
             if scale == 0:
                 scale = 1
@@ -201,7 +240,7 @@ class Source(object):
             which case it inherits that source's factor.
         """
         # The source's data is a 1D array 
-        self._data = np.array(data, dtype=np.float64)
+        self._data = np.array(data, dtype='float64')
         if len(self._data.shape) != 1:
             raise ValueError("Source data must be 1D")
 
@@ -213,9 +252,8 @@ class Source(object):
         self._grads = list()
         # List of variables names used in computing this source factor
         self._pars = list()
-
-        # Indicates if the contents of this source are subject to stat. uncert
-        self._use_stats = False
+        # Relative statistical uncertainty on the count in each bin
+        self._stat_errs = np.array([], dtype='float64')
 
         # Inherit the expresion from the shapeof
         if shapeof:
@@ -311,12 +349,15 @@ class Source(object):
         # Combine parameters for this factor to parent sources
         self._pars += pars
 
-    def use_stats(self):
+    def use_stats(self, errs):
         """
         Indicate that the contents of this source are subject to statistical
         uncertianties (e.g. Monte-Carlo computed sources).
+
+        :param err: [float]
+            relative statistical error on each bin
         """
-        self._use_stats = True
+        self._stat_errs = np.array(errs, dtype='float64')
 
 
 class SpecBuilder(object):
@@ -368,7 +409,7 @@ class SpecBuilder(object):
         """
         if self._ncols is None:
             self._ncols = len(source._data)
-            self._stat_scales = np.zeros(self._ncols, dtype=np.float64)
+            self._stat_scales = np.zeros(self._ncols, dtype='float64')
 
         elif len(source._data) != self._ncols:
             raise RuntimeError("Source bins doesn't match spectrum")
@@ -377,7 +418,7 @@ class SpecBuilder(object):
         # Keep the set of all parameter names
         self._pars |= set(source._pars)
 
-        if source._use_stats:
+        if len(source._stat_errs) > 0:
             if not self._stat_pars:
                 # Setup parameter names for each bin uncertainty. Make sure
                 # they sort alphanumerically, so pad with enough zeros
@@ -385,28 +426,31 @@ class SpecBuilder(object):
                 self._stat_pars = [
                     ('stat%0'+nzeros+'d') % i for i in range(self._ncols)]
                 self._pars |= set(self._stat_pars)
-            # Count this source's contents towards stat uncertainty
-            self._stat_scales += source._data
+            # Count this source's contents towards stat uncertainty. Scale the
+            # relative uncertainty into the counts for proper summing.
+            self._stat_scales += 1./source._stat_errs**2
 
-    def set_prior(self, name, centre, down=None, up=None):
+    def set_prior(self, name, central, low=None, high=None):
         """
-        Set the prior value for a parameter. If up and down are None, the
+        Set the prior value for a parameter. If low and high are None, the
         parameter isn't constrained.
 
         :param name: str
             name of parameter to constrain
-        :param centre: float
+        :param central: float
             prior value for the parameter
-        :param down: float
-            penalize by e^-0.5 at this value below centre
-        :param up: float
-            penalize by e^-0.5 at this value above centre
+        :param low: float
+            penalize by e^-0.5 at this value (below central)
+        :param high: float
+            penalize by e^-0.5 at this value (above central)
         """
-        if bool(down) != bool(up):
+        if bool(low) != bool(high):
             raise ValueError("Only one prior constraint is provided")
-        if (down is not None or up is not None) and not (down <= centre <= up):
-            raise ValueError("Prior constraints aren't correctly bound")
-        self._priors[name] = (centre, down, up)
+        if low is not None and not low <= central:
+            raise ValueError("Invalid lower bound")
+        if high is not None and not high >= central:
+            raise ValueError("Invalid lower bound")
+        self._priors[name] = (central, low, high)
 
     def add_regularization(self, expr, pars, grads):
         """
@@ -444,6 +488,7 @@ class SpecBuilder(object):
         Build the C++ code, compile, and return a spectrum object.
         """
 
+        # Note: this will be the final order of the parameters
         pars = sorted(list(self._pars))
         ipars = dict([(par, i) for i, par in enumerate(pars)])
 
@@ -474,7 +519,7 @@ class SpecBuilder(object):
         for irow, source in enumerate(self._sources):
             # Expression to evaluate source factor
             code_factors.append(source._expr if source._expr else '1')
-            code_usestats.append('1' if source._use_stats else '0')
+            code_usestats.append('1' if len(source._stat_errs) else '0')
             code_rownpars.append(0)
             # Add code to compute gradients of each spectrum bin w.r.t to
             # the parameters in the factor expression for this source
@@ -589,20 +634,28 @@ class SpecBuilder(object):
         # Grab the spectrum constructor from the compiled code
         constructor = getattr(ROOT, self.name)
 
-        # Build a python spectrum object using that constructor
-        spec = ParSpec(self.name, pars, self._ncols, constructor)
-
+        # Gather prior information for the parameters 
+        central = [0] * len(pars)
+        lows = [0] * len(pars)
+        highs = [0] * len(pars)
         # Tell the spectrum about the central value of constrained parameters
         for par in self._priors:
-            spec._centralx[spec._make_ipar(par)] = self._priors[par][0]
+            ipar = ipars[par]
+            central[ipar] = self._priors[par][0]
             # Use scales if prior is constrained
             if self._priors[par][1] is not None:
-                spec._scales[spec._make_ipar(par)] = [
-                    self._priors[par][1],
-                    self._priors[par][2]]
+                lows[ipar] = self._priors[par][1]
+                highs[ipar] = self._priors[par][2]
             # Unconstrained prior
             else:
-                spec._scales[spec._make_ipar(par)] = [0, 0]
+                lows[ipar] = central[ipar]
+                highs[ipar] = central[ipar]
 
-        return spec
-
+        return ParSpec(
+            self.name,
+            pars,
+            self._ncols,
+            central,
+            lows,
+            highs,
+            constructor())
