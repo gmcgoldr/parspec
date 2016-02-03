@@ -1,5 +1,7 @@
 from __future__ import division
 import warnings
+import sys
+import time
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -10,10 +12,25 @@ from pymcmc import MCMC
 
 import templates
 
-# Try to set a nicer style for matplotlib, only for version > 1.5
-_vmpl = list(map(int, plt.matplotlib.__version__.split('.')))
-if _vmpl[0] > 1 or (_vmpl[0] == 1 and _vmpl[1] >= 5):
-    plt.style.use('ggplot')
+
+def clean_pyplot():
+    """Make pyplot nicer"""
+    version = float('.'.join(plt.matplotlib.__version__.split('.')[:2]))
+    if version >= 1.5:
+        plt.style.use('ggplot')
+    try:
+        # Try to get the default colors in the new parameters
+        plt.ccolors = [c['color'] for c in plt.rcParams['axes.prop_cycle']]
+    except KeyError:
+        # Fall back to the old parameters
+        plt.ccolors = list(plt.rcParams['axes.color_cycle'])
+    plt.rc('lines', linewidth=2)
+    plt.rc('patch', linewidth=2)
+
+
+def rescale_plot(factor=0.25):
+    low, high = plt.ylim()
+    plt.ylim(low-factor*(high-low), high+factor*(high-low))
 
 
 def draw_point_hist(y, x=None, **kwargs):
@@ -67,20 +84,20 @@ def draw_point_hist(y, x=None, **kwargs):
     hx[0] = edges[0]
     hx[-1] = edges[-1]
 
-    lines = plt.plot(hx, hy, **kwargs)
+    lines = plt.plot(hx[1:-1], hy[1:-1], **kwargs)
     plt.xlim(hx[0], hx[-1])
 
     return lines[0]
 
 
-def build_template_meas():
+def build_template_meas(name='example', add_systs=0):
     """
     Build a template measurment object.
 
     :return: templates.TemplateMeasurement
     """
 
-    meas = templates.TemplateMeasurement()
+    meas = templates.TemplateMeasurement(name)
     meas.set_lumi(1, 0.02)
 
     # Base shape for the signal, triangular distribution
@@ -140,7 +157,7 @@ def make_pseudo(meas, systs=True, signal=True, stats=True):
     # Get the scales for the paramters controlling the spectrum
     scales = meas.spec.scales
     # Randomize the true underlying values for constrained parameters
-    true = list(meas.spec.central)
+    truth = list(meas.spec.central)
 
     if systs:
         # Vary the constrained parameters based on their priors
@@ -148,21 +165,21 @@ def make_pseudo(meas, systs=True, signal=True, stats=True):
             if par in meas.spec.unconstrained:
                 continue
             ipar = meas.spec.ipar(par)
-            true[ipar] += np.random.normal(0, scales[ipar])
+            truth[ipar] += np.random.normal(0, scales[ipar])
 
     if signal:
         # Also choose a random signal strength (unconstrained parameter)
-        true[meas.spec.ipar('p')] = np.random.uniform(-1, 1)
+        truth[meas.spec.ipar('p')] = np.random.uniform(-1, 1)
 
     # Build the data spectrum that would be observed for those values
-    data = meas.spec(true)
+    data = meas.spec(truth)
 
     if stats:
         # Poisson fluctuate yields (note that the statistical parameters
         # acount for fluctuation in simulated yields)
         data = np.random.poisson(data)
 
-    return data, true
+    return data, truth
 
 
 def single_fit(meas, randomize=False, nmax=100):
@@ -323,21 +340,17 @@ def run_mcmc(meas, x, nsamples, covm=None, scales=None):
     return mean, mean_down, mean_up, mcmc
 
 
-def measure_template(meas, draw=False):
+def measure_template(meas):
     """
     Generate a fake data spectrum using a template measurement spectrum, and
     randomizing its parameters. Then fit this fake data to see if its true 
     underlying parameters can be recovered.
 
-    :param meas: TemplateMeasurement
-        measurment object to use
-    :param draw: bool
-        draw the fit spectrum
     :return: dict
         map each parameter to various measurement values
     """
-
-    data, true = make_pseudo(meas)
+    # Make a pseudo-experiment
+    data, truth = make_pseudo(meas)
     meas.spec.set_data(data)
 
     # First fit without randomization
@@ -367,7 +380,7 @@ def measure_template(meas, draw=False):
     for par in meas.spec.pars:
         ipar = meas.spec.ipar(par)
         results[par] = dict()
-        results[par]['true'] = true[ipar]
+        results[par]['true'] = truth[ipar]
         results[par]['fit'] = minx[ipar]
         results[par]['fit_first'] = fit_first[ipar]
         results[par]['fit_err'] = fit_err[ipar]
@@ -376,24 +389,6 @@ def measure_template(meas, draw=False):
         results[par]['mean'] = mean[ipar]
         results[par]['mean_down'] = mean_down[ipar]
         results[par]['mean_up'] = mean_up[ipar]
-    
-    if draw:
-        nominal = meas.spec(meas.spec.central)
-        l0 = draw_point_hist(
-            np.zeros(meas.spec.npars), 
-            label='nominal')
-        ltrue = draw_point_hist(
-            100*(data/nominal-1), 
-            label='true')
-        lfit = draw_point_hist(
-            100*(meas.spec(minx)/nominal-1), 
-            ls='--', label='fit')
-        plt.legend(handles=[l0, ltrue, lfit])
-        ylims = plt.ylim()
-        yrange = ylims[1] - ylims[0]
-        plt.ylim(ylims[0], ylims[0]+1.2*yrange)
-        plt.savefig('spectrum_fit.png', format='png')
-        plt.clf()
 
     return results
 
@@ -408,6 +403,17 @@ def draw_spectra(meas, normalize=True):
     :param normalize: bool
         normalize fluctuated spectrum to the nominal one
     """
+
+    draw_point_hist(meas.spec(meas.spec.central))
+
+    rescale_plot()
+    plt.ylim(ymin=0)
+
+    plt.xlabel('Bin')
+    plt.ylabel('Spctral value / bin')
+
+    plt.savefig('spectrum.pdf', format='pdf')
+    plt.clf()
 
     for par in meas.spec.pars:
         ipar = meas.spec.ipar(par)
@@ -444,46 +450,172 @@ def draw_spectra(meas, normalize=True):
 
         plt.legend(handles=[l0, lhigh, llow])
 
-        ylims = plt.ylim()
-        yrange = ylims[1] - ylims[0]
-        plt.ylim(ylims[0], ylims[0]+1.2*yrange)
+        rescale_plot()
 
-        plt.savefig('spectrum_%s.png' % par, format='png')
+        plt.xlabel('Bin')
+        plt.ylabel('Relative offset percentage')
+
+        plt.savefig('spectrum-%s.pdf' % par, format='pdf')
         plt.clf()
 
 
+def eval_likelihood(meas, ntrials=100):
+    """
+    Evaluate the fit log likelihood with and without initial parameter
+    randomization.
+    """
+    central = np.array(meas.spec.central)
+    scales = np.array(meas.spec.scales)
+
+    for par in list(meas.spec.pars) + [None]:
+        shifts = np.copy(scales)
+
+        if par is not None:
+            ipar = meas.spec.ipar(par)
+            shifts[ipar] = 0
+
+        data = meas.spec(central+shifts)
+        meas.spec.set_data(data)
+
+        fixed_ll = list()
+        for imin in range(ntrials):
+            try:
+                minx, ll, _ = single_fit(meas, randomize=False)
+                fixed_ll.append(ll)
+            except RuntimeError:
+                pass
+
+        random_ll = list()
+        for imin in range(ntrials):
+            try:
+                minx, ll, _ = single_fit(meas, randomize=True)
+                random_ll.append(ll)
+            except RuntimeError:
+                pass
+
+        _, _, h1 = plt.hist(
+            fixed_ll, label='fixed ll',
+            bins=np.linspace(-4,0,100+1), 
+            fill=False, edgecolor=plt.ccolors[0])
+
+        _, _, h2 = plt.hist(
+            random_ll, label='random ll',
+            bins=np.linspace(-4,0,100+1), 
+            fill=False, edgecolor=plt.ccolors[1])
+
+        plt.legend(handles=[h1[0], h2[0]])
+
+        rescale_plot()
+        plt.ylim(ymin=0)
+
+        plt.xlabel("Log likelihood")
+        plt.ylabel("Number of fits")
+        if par is not None:
+            plt.title("Fit with %s fixed to 0" % par)
+            plt.savefig('fitll-%s.pdf' % par, format='pdf')
+        else:
+            plt.savefig('fitll.pdf', format='pdf')
+        plt.clf()
+
+
+def eval_localmin(meas):
+    """
+    Evalute the local minimum.
+    """
+    # The truth has all parameters shifted to +1 sigma
+    data = meas.spec(np.array(meas.spec.central)+meas.spec.scales)
+    meas.spec.set_data(data)
+
+    for fit_type in ['local', 'global']:
+        if fit_type == 'local':
+            min_x, ll, minimizer = single_fit(meas, randomize=False)
+        else:
+            min_x, ll, minimizer = global_fit(meas, ntrials=10)
+
+        nominal = meas.spec(meas.spec.central)
+
+        l0 = draw_point_hist(
+            np.zeros(len(nominal)), 
+            label='nominal')
+        ltrue = draw_point_hist(
+            100*(data/nominal-1), 
+            label='true')
+        lfit = draw_point_hist(
+            100*(meas.spec(min_x)/nominal-1), 
+            ls='--', label='fit')
+        plt.legend(handles=[l0, ltrue, lfit])
+
+        rescale_plot()
+
+        plt.title("%s fit" % fit_type)
+        plt.xlabel('Bin')
+        plt.ylabel('Spectral value / bin')
+
+        plt.savefig('spectrum-fit-%s.pdf' % fit_type, format='pdf')
+        plt.clf()
+
+        print("%s fit:" % fit_type)
+        print("%10s %+.3f" % ('ll', ll))
+        print("%10s %+.3f" % ('p', min_x[meas.spec.ipar('p')]))
+        print("%10s %+.3f" % ('lumi', min_x[meas.spec.ipar('p')]))
+        print("%10s %+.3f" % ('syst_s1', min_x[meas.spec.ipar('syst_s1')]))
+        print("%10s %+.3f" % ('syst_s2', min_x[meas.spec.ipar('syst_s2')]))
+
+    # Last minimizer was the global one, keep working with that
+
+    # Compute the covariance matrix, never seen it fail, but warn in case
+    if not minimizer.Hesse():
+        warnings.warn("Failed to compute error marix", RuntimeWarning)
+
+    covm = np.array([
+        [minimizer.CovMatrix(i,j) 
+        for j in range(meas.spec.npars)] 
+        for i in range(meas.spec.npars)])
+
+    # Probe the full space with MCMC
+    mean, mean_down, mean_up, mcmc = \
+        run_mcmc(meas, min_x, nsamples=1e6, covm=covm)
+
+    plt.hist2d(
+        mcmc.data[:, meas.spec.ipar('lumi')], 
+        mcmc.data[:, meas.spec.ipar('syst_s1')],
+        bins=30,
+        cmap=plt.get_cmap('Blues'),
+        normed=True)
+    plt.colorbar(label="probability")
+    plt.xlabel("lumi")
+    plt.ylabel("syst_s1")
+    plt.savefig('llspace-lumi-syst_1.pdf', format='pdf')
+    plt.clf()
+
+    plt.hist2d(
+        mcmc.data[:, meas.spec.ipar('p')], 
+        mcmc.data[:, meas.spec.ipar('syst_s1')],
+        bins=30,
+        cmap=plt.get_cmap('Blues'),
+        normed=True)
+    plt.colorbar(label="probability")
+    plt.xlabel("p")
+    plt.ylabel("syst_s1")
+    plt.savefig('llspace-p-syst_1.pdf', format='pdf')
+    plt.clf()
+
+
 if __name__ == '__main__':
+    clean_pyplot()  # make pyplot nice
+    np.random.seed(1234)  # get the same results each time
+
     print("Building measurement...")
     meas = build_template_meas()
 
-    print("Fitting templates...")
-    results = measure_template(meas, draw=True)
-    print(('%15s'+'  %6s'*9) % (
-        "Parameter", 
-        "True", 
-        "Fit", 
-        "First", 
-        "Err", 
-        "Down", 
-        "Up", 
-        "Mean",
-        "Down", 
-        "Up"))
-    for par in meas.spec.pars:
-        print(('%15s'+'  %+6.3f'*9) % (
-            par, 
-            results[par]['true'],
-            results[par]['fit'],
-            results[par]['fit_first'],
-            results[par]['fit_err'],
-            results[par]['fit_down'],
-            results[par]['fit_up'],
-            results[par]['mean'],
-            results[par]['mean_down'],
-            results[par]['mean_up']))
-
     print("Drawing spectrum...")
-    draw_spectra(build_template_meas())
+    draw_spectra(meas)
+
+    print("Assessing minimization...")
+    eval_likelihood(meas)
+
+    print("Assessing local minimum...")
+    eval_localmin(meas)
 
     print("Running pseudo-experiments...")
     print("Warning: this will take around 1 hour")
@@ -502,7 +634,7 @@ if __name__ == '__main__':
         fout.flush()
         for itrial in range(1000):
             try:
-                results = measure_template(meas, draw=False)
+                results = measure_template(meas)
             except RuntimeError:
                 print("Measurement failed")
                 continue
