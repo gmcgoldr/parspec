@@ -508,6 +508,9 @@ class SpecBuilder(object):
             code_pars.append(
                 'const unsigned _istats = %d;' %
                 ipars[self._stat_pars[0]])
+        else:
+            code_pars.append('const double* _stats = 0;')
+            code_pars.append('const unsigned _istats = 0;')
 
         code_factors = list()
         code_usestats = list()
