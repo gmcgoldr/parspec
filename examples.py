@@ -91,7 +91,7 @@ def draw_point_hist(y, x=None, **kwargs):
     return lines[0]
 
 
-def draw_spectrum(meas, x, rel=False, **kwargs):
+def draw_spectrum(meas, x, rel=False, scale=True, **kwargs):
     """
     Convenience function to draw a spectrum.
 
@@ -110,12 +110,14 @@ def draw_spectrum(meas, x, rel=False, **kwargs):
         s = meas.spec(x)
         line = draw_point_hist(100*(s/s0-1), **kwargs)
         plt.ylabel('Relative offset percentage')
-        rescale_plot()
+        if scale:
+            rescale_plot()
 
     else:
         line = draw_point_hist(meas.spec(x), **kwargs)
         plt.ylabel('Spctral value / bin')
-        rescale_plot()
+        if scale:
+            rescale_plot()
         plt.ylim(ymin=0)
 
     plt.xlabel('Bin')
@@ -152,7 +154,7 @@ def build_template_meas(name='example'):
     src_sig.add_syst('s2', sig*[1.02, 1.01, 1, 1.01, 1.02])
 
     # Add a flat-ish background (different shape from signal)
-    bg1 = np.array([1200, 1100, 1000, 1000, 1000], dtype=float)
+    bg1 = np.array([1600, 1300, 1000, 1000, 1000], dtype=float)
     src_bg1 = meas.new_source('bg1', bg1)
     src_bg1.use_lumi()
     src_bg1.use_stats(1./(10*bg1)**0.5)
@@ -161,7 +163,7 @@ def build_template_meas(name='example'):
     src_bg1.add_syst('s2', bg1*[1.02, 1.01, 1, 1.01, 1.02])
 
     # Add a background not impacted by lumi or stats (e.g. data driven)
-    bg2 = np.array([1000, 1000, 1000, 1100, 1200], dtype=float)
+    bg2 = np.array([1000, 1000, 1000, 1300, 1600], dtype=float)
     src_bg2 = meas.new_source('bg2', bg2)
     src_bg2.set_xsec(1, 0.9, 1.1)
 
@@ -275,9 +277,9 @@ def asses_space(meas):
     lls, xs, rels, prob = minutils.find_minima(meas.spec)
 
     print("Found %d minima with likelihoods:" % len(lls))
-    print(', '.join(["%.2f" % l for l in lls]))
+    print(', '.join(["%.3f" % l for l in lls]))
 
-    print("Global minimum is found %.2f%% of the time" % prob)
+    print("Global minimum is found %.3f%% of the time" % prob)
 
     l0 = draw_spectrum(meas, truth, True, label='truth', linestyle='--')
     l1 = draw_spectrum(meas, xs[0], True, label='fit')
@@ -286,20 +288,20 @@ def asses_space(meas):
     plt.clf()
 
     for imin in range(1, len(lls)):
-        print("Local minimum %.2f" % lls[imin])
+        print("Local minimum %.3f" % lls[imin])
 
         isort = np.argsort(np.fabs(rels[imin]))[::-1]
         par1 = meas.spec.pars[isort[0]]
         par2 = meas.spec.pars[isort[1]]
         print("Differs in %s, %s" % (par1, par2))
 
-        print("%s_0: %.2f, %s_%d: %.2f" % (
+        print("%s_0: %.3f, %s_%d: %.3f" % (
             par1,
             xs[0][meas.spec.ipar(par1)],
             par1, imin,
             xs[imin][meas.spec.ipar(par1)]))
 
-        print("%s_0: %.2f, %s_%d: %.2f" % (
+        print("%s_0: %.3f, %s_%d: %.3f" % (
             par2,
             xs[0][meas.spec.ipar(par2)],
             par2, imin,
@@ -390,26 +392,27 @@ def draw_spectra(meas, normalize=True):
     """
 
     # Draw the plain spectrum
-    draw_spectrum(meas, meas.spec.central, 'spectrum.pdf')
-
-    # Draw only the signal
     x = list(meas.spec.central)
+    lfull = draw_spectrum(meas, x, scale=True, label='full')
+
+    x[meas.spec.ipar('xsec_sig')] = 1
     x[meas.spec.ipar('xsec_bg1')] = 0
     x[meas.spec.ipar('xsec_bg2')] = 0
-    draw_spectrum(meas, x, 'spectrum-sig.pdf')
+    lsig = draw_spectrum(meas, x, scale=False, label='sig')
 
-    # Draw only the signal
-    x = list(meas.spec.central)
     x[meas.spec.ipar('xsec_sig')] = 0
+    x[meas.spec.ipar('xsec_bg1')] = 1
     x[meas.spec.ipar('xsec_bg2')] = 0
-    draw_spectrum(meas, x, 'spectrum-bg1.pdf')
+    lbg1 = draw_spectrum(meas, x, scale=False, label='bg1')
 
-    # Draw only the signal
-    x = list(meas.spec.central)
     x[meas.spec.ipar('xsec_sig')] = 0
     x[meas.spec.ipar('xsec_bg1')] = 0
-    draw_spectrum(meas, x, 'spectrum-bg2.pdf')
+    x[meas.spec.ipar('xsec_bg2')] = 1
+    lbg2 = draw_spectrum(meas, x, scale=False, label='bg2')
 
+    plt.legend(handles=[lfull, lsig, lbg1, lbg2])
+    plt.savefig('spectrum.pdf', format='pdf')
+    plt.clf()
 
     for par in meas.spec.pars:
         ipar = meas.spec.ipar(par)
@@ -436,13 +439,13 @@ def draw_spectra(meas, normalize=True):
         x[ipar] = high
         lhigh = draw_point_hist(
             meas.spec(x) if not normalize else 100*(meas.spec(x)/nominal-1),
-            label=r'%s = +1$\sigma$' % par)
+            label=r'%s = %+.3e' % (par, high))
 
         # Shift to -1 and draw
         x[ipar] = low
         llow = draw_point_hist(
             meas.spec(x) if not normalize else 100*(meas.spec(x)/nominal-1),
-            label=r'%s = -1$\sigma$' % par)
+            label=r'%s = %+.3e' % (par, low))
 
         plt.legend(handles=[l0, lhigh, llow])
 
