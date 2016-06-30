@@ -363,7 +363,7 @@ class Source(object):
         uncertianties (e.g. Monte-Carlo computed sources).
 
         :param err: [float]
-            relative statistical error on each bin
+            statistical error on each bin
         """
         self._stat_errs = np.array(errs, dtype='float64')
 
@@ -395,9 +395,8 @@ class SpecBuilder(object):
         # Number of columns determined from first source added
         self._ncols = None
 
-        # Remember the total number of events subject to statistical
-        # uncertainties in each bin
-        self._stat_scales = None
+        # Contributions from each source to stat. uncertainty
+        self._source_stats = list()
         # Remember the stat parameter names explicitey
         self._stat_pars = list()
 
@@ -417,8 +416,6 @@ class SpecBuilder(object):
         """
         if self._ncols is None:
             self._ncols = len(source._data)
-            self._stat_scales = np.zeros(self._ncols, dtype='float64')
-
         elif len(source._data) != self._ncols:
             raise RuntimeError("Source bins doesn't match spectrum")
 
@@ -427,6 +424,8 @@ class SpecBuilder(object):
         self._pars |= set(source._pars)
 
         if len(source._stat_errs) > 0:
+            if len(source._stat_errs) != self._ncols:
+                raise RuntimeError("Source bin stats doesn't match spectrum")
             if not self._stat_pars:
                 # Setup parameter names for each bin uncertainty. Make sure
                 # they sort alphanumerically, so pad with enough zeros
@@ -434,11 +433,7 @@ class SpecBuilder(object):
                 self._stat_pars = [
                     ('stat%0'+nzeros+'d') % i for i in range(self._ncols)]
                 self._pars |= set(self._stat_pars)
-            # Count this source's contents towards stat uncertainty. Scale the
-            # relative uncertainty into the counts for proper summing.
-            non_zero_errs = source._stat_errs > 0
-            self._stat_scales[non_zero_errs] += \
-                1./source._stat_errs[non_zero_errs]**2
+            self._source_stats.append(list(source._stat_errs))
 
     def set_prior(self, name, central, low=None, high=None):
         """
@@ -544,12 +539,9 @@ class SpecBuilder(object):
         code_ll = list()   # code computes the log likelihood
         code_gll = list()  # code computes the log likelihood and gradients
 
-        # stat_scales is the count of events in each column with a stat.
-        # uncertainty. The total in that column can change by n/sqrt(n)
-        # with a 1 sigma penalty. Scale for fraction is just 1/n
-        for par, scale in zip(self._stat_pars, self._stat_scales):
-            scale = 1./max(scale, 1)**0.5
-            self._priors[par] = (1, 1-scale, 1+scale)
+        stat_scales = np.sum(self._source_stats, axis=0)
+        for par, scale in zip(self._stat_pars, stat_scales):
+            self._priors[par] = (0, -scale, +scale)
 
         # Add constraint terms for regularizations
         for rexpr, rpars, rgrads in self._regularizations:

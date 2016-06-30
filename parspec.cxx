@@ -52,10 +52,9 @@ public:
     // Compute spectrum without gradients
     for (unsigned _i = 0; _i < _nrows; _i++)
       for (unsigned _j = 0; _j < _ncols; _j++)
-        _spec[_j] += 
-            _factors[_i] * 
-            (_usestats[_i] ? _stats[_j] : 1) * 
-            _sources[_i*_ncols+_j];
+        _spec[_j] += _factors[_i] * _sources[_i*_ncols+_j];
+    for (unsigned _j = 0; _j < _ncols; _j++)
+      _spec[_j] += _stats[_j];
     // Don't allow contents to drop below 0
     for (unsigned _j = 0; _j < _ncols; _j++)
       _spec[_j] = std::max(0., _spec[_j]);
@@ -90,21 +89,17 @@ public:
     // Compute spectrum with gradients
     for (unsigned _i = 0; _i < _nrows; _i++) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
-        _spec[_j] += 
-            _factors[_i] * 
-            (_usestats[_i] ? _stats[_j] : 1) * 
-            _sources[_i*_ncols+_j];
-        if (_usestats[_i])
-          _grads[(_istats+_j)*_ncols+_j] += 
-              _factors[_i] * 
-              _sources[_i*_ncols+_j];
+        _spec[_j] += _factors[_i] * _sources[_i*_ncols+_j];
         for (unsigned _k = 0; _k < _rownpars[_i]; _k++)
           _grads[_rowpars[_ipars+_k]*_ncols+_j] += 
-              _pargrads[_ipars+_k] *
-              (_usestats[_i] ? _stats[_j] : 1) * 
-              _sources[_i*_ncols+_j];
+              _pargrads[_ipars+_k] * _sources[_i*_ncols+_j];
       }
       _ipars += _rownpars[_i];
+    }
+    // Add per column corrections to the spectrum
+    for (unsigned _j = 0; _j < _ncols; _j++) {
+      _spec[_j] += _stats[_j];
+      _grads[(_istats+_j)*_ncols+_j] += 1;
     }
     // Don't allow values below 1, 0 would result in nan when computing
     // Poisson likelihoods

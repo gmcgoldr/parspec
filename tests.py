@@ -26,7 +26,7 @@ class TestParSpec(unittest.TestCase):
         # Indicate the bin contents in sig are subject to statistical
         # uncertainty, based on double the count (as if 2x MC was generated
         # then scaled down by 0.5)
-        src_sig.use_stats((2*np.array(sig))**-0.5)
+        src_sig.use_stats(.5*(2*np.array(sig))**0.5)
         # Allow its scale to vary
         src_sig.set_expression(
             'lumi*xsec_sig',  # scale factor
@@ -130,14 +130,14 @@ class TestParSpec(unittest.TestCase):
         """Check if the spectrum returns the correct central value"""
         # Paramters are:
         # lumi (centered at 1 to leave yields unchanged)
-        # stat * 5 (centered at 1 to leave bin conents unmodified)
+        # p (centered at 0 to not contribute)
+        # stat * 5 (centered at 0 to leave bin conents unmodified)
         # syst1 (centered at 0 to not contribute)
         # syst2 (centered at 0 to not contribute)
-        # p (centered at 0 to not contribute)
         # xsec_sig (centered at 1 to leave yeilds unchanged)
         # xsec_bg (centered at 1 to leave yeilds unchanged)
         np.testing.assert_array_almost_equal(
-            [1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1],
             self.spec.central)
 
     def test_scales(self):
@@ -195,7 +195,7 @@ class TestParSpec(unittest.TestCase):
             rel_err = n**0.5 / n
             self.assertAlmostEqual(
                 self.spec.parinfo(par)['high'],
-                1+rel_err)
+                contents[ibin]*rel_err)
 
     def test_spec_nom(self):
         """Check nominal spectrum is as expected"""
@@ -266,13 +266,13 @@ class TestParSpec(unittest.TestCase):
         """Check spectrum with varied statistics is as expected"""
         # Fluctuate bin statistics
         true = (
-            self.builder._sources[0]._data * 
-            np.array([1.1, 1, 0.7, 1, 1]) +  # applies only to signal
-            self.builder._sources[5]._data 
+            self.builder._sources[0]._data +
+            self.builder._sources[5]._data +
+            np.array([30, 0, -15, 0, 0])
         )
         pars = list(self.spec.central)
-        pars[self.spec.ipar('stat0')] = 1.1
-        pars[self.spec.ipar('stat2')] = 0.7
+        pars[self.spec.ipar('stat0')] = 30
+        pars[self.spec.ipar('stat2')] = -15
         comp = self.spec(pars)
         np.testing.assert_array_almost_equal(true, comp)
 
@@ -283,17 +283,17 @@ class TestParSpec(unittest.TestCase):
         pars[self.spec.ipar('lumi')] = 0.8
         pars[self.spec.ipar('syst1')] = +0.2
         pars[self.spec.ipar('syst2')] = -0.3
-        pars[self.spec.ipar('stat0')] = 1.1
-        pars[self.spec.ipar('stat2')] = 0.7
+        pars[self.spec.ipar('stat0')] = 30
+        pars[self.spec.ipar('stat2')] = -15
         pars[self.spec.ipar('p')] = 1.2
 
     def test_spec_varied(self):
-        """Check spectrum with all parmaeters varied is as expected"""
+        """Check spectrum with all parameters varied is as expected"""
         true = (
             # Add source with lumi=0.8 and xsec=1.2
-            0.8*1.2 * self.builder._sources[0]._data * 
-            # Scale by statitiscal fluctuations on bins 0 and 2
-            np.array([1.1, 1, 0.7, 1, 1]) + 
+            0.8*1.2 * self.builder._sources[0]._data +
+            # Add statitiscal fluctuations on bins 0 and 2
+            np.array([30, 0, -15, 0, 0]) + 
             # Add a 0.2 contribution from syst1
             0.8*1.2 * +0.2 * self.builder._sources[1]._data +
             # Add a -0.3 contribution from syst2
