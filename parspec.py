@@ -551,22 +551,6 @@ class SpecBuilder(object):
             scale = 1./max(scale, 1)**0.5
             self._priors[par] = (1, 1-scale, 1+scale)
 
-        # Add constraint terms to the log likelihood
-        for prior, vals in sorted(list(self._priors.items())):
-            if vals[1] is None:
-                continue  # some priors are unconstrained, skip
-            scale = 'std::pow(((%s<%.7e) ? %.7e : %.7e), 2)' % (
-                prior, vals[0],  # check which side of central value
-                vals[0]-vals[1],  # scale by down prior constraint
-                vals[0]-vals[2])  # scale by up prior constraint
-            code_ll.append(
-                '_f += -0.5 * std::pow(%s-%.7e, 2) / %s;' % (
-                prior, vals[0], scale))
-            code_gll.append(code_ll[-1])
-            # Add gradient contribution to ll from each prior
-            code_gll.append('_df[%d] += -(%s-%.7e) / %s;' % (
-                ipars[prior], prior, vals[0], scale))
-
         # Add constraint terms for regularizations
         for rexpr, rpars, rgrads in self._regularizations:
             code_ll.append('_f += %s;' % rexpr)
@@ -592,6 +576,28 @@ class SpecBuilder(object):
         for ipar, par in enumerate(pars):
             code = re.sub(r'(?<=[^\w\d])%s(?=\W)'%par, '_x[%d]'%ipar, code)
 
+        # Piror data to insert in the code
+        prior0_data = ['0'] * len(pars)  # central value
+        priorDown_data = ['0'] * len(pars)  # down scale
+        priorUp_data = ['0'] * len(pars)  # up scale
+        priorMask_data = ['0'] * len(pars)  # 1 if the parameter is regularized
+        # Find the prior information for each parameter
+        for ipar, par in enumerate(pars):
+            prior_vals = self._priors.get(par, None)
+            if prior_vals is None:
+                continue
+            # Update data for those that are regularized
+            prior0_data[ipar] = '%.7e' % prior_vals[0]
+            priorDown_data[ipar] = '%.7e' % (prior_vals[0]-prior_vals[1])
+            priorUp_data[ipar] = '%.7e' % (prior_vals[0]-prior_vals[2])
+            priorMask_data[ipar] = '1'
+        # Insert the information in the code
+        code = code.replace('__PRIOR0__', ', '.join(prior0_data))
+        code = code.replace('__PRIORDOWN__', ', '.join(priorDown_data))
+        code = code.replace('__PRIORUP__', ', '.join(priorUp_data))
+        code = code.replace('__PRIORMASK__', ', '.join(priorMask_data))
+
+        # Source data (spectrum contributions) to insert int he code
         sources_data = ',\n'.join([
             ', '.join(['%.7e' % v for v in s._data])
             for s in self._sources])

@@ -19,6 +19,10 @@
  */
 class __NAME__ : public ROOT::Math::IGradientFunctionMultiDim {
 private:
+  static const double _prior0[];
+  static const double _priorDown[];
+  static const double _priorUp[];
+  static const bool _priorMask[];
   static const double _sources[];
   static const unsigned _nrows = __NROWS__;
   static const unsigned _ncols = __NCOLS__;
@@ -106,9 +110,10 @@ public:
     // Poisson likelihoods
     for (unsigned _j = 0; _j < _ncols; _j++)
       _spec[_j] = std::max(1., _spec[_j]);
-    // gradient of ll w.r.t. each parameter
+    // Compute contributions to ll due to shifts in the spectrum under the
+    // influence of each parameter (i.e. Poisson components)
     for (unsigned _j = 0; _j < _ncols; _j++) {
-      // log likelihood contributions from each column
+      // ll contributions from each column
       _f += -0.5 * std::pow(_spec[_j]-_data[_j],2) / _spec[_j];
       // graduient of ll due to s, a change in spectrum column _j
       const double dllds = 
@@ -117,6 +122,20 @@ public:
       // dll/dp = dll/ds * ds/dp where p is parameter _i
       for (unsigned _i = 0; _i < _ndims; _i++)
         _df[_i] += _grads[_i*_ncols+_j] * dllds;
+    }
+    // Compute contributions to ll due to priors
+    for (unsigned _i = 0; _i < _ndims; _i++) {
+      if (!_priorMask[_i]) continue;
+      // ll contribution from prior on parameter _i
+      _f += 
+          // How far this parameter is from its nominal value
+          -0.5 * std::pow(_x[_i]-_prior0[_i],2) / 
+          // The width of the prior, conditional whether its below or above 0
+          std::pow(((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]), 2);
+      // dll/dp contribution from the prior penalty
+      _df[_i] += 
+          -(_x[_i]-_prior0[_i]) / 
+          std::pow(((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]), 2);
     }
     // User defined likelihood contributions and gradients
     __GLL__
@@ -147,10 +166,32 @@ private:
     Compute(_x, _spec);
     for (unsigned _j = 0; _j < _ncols; _j++)
       _f += -0.5 * std::pow(_spec[_j]-_data[_j],2) / _spec[_j];
+    for (unsigned _i = 0; _i < _ndims; _i++) {
+      if (!_priorMask[_i]) continue;
+      _f += 
+          -0.5 * std::pow(_x[_i]-_prior0[_i],2) / 
+          std::pow(((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]), 2);
+    }
     __LL__
     if (_negative) _f *= -1;
     return _f;
   }
+};
+
+const double __NAME__::_prior0[] = { 
+__PRIOR0__
+};
+
+const double __NAME__::_priorDown[] = { 
+__PRIORDOWN__
+};
+
+const double __NAME__::_priorUp[] = { 
+__PRIORUP__
+};
+
+const bool __NAME__::_priorMask[] = { 
+__PRIORMASK__
 };
 
 const double __NAME__::_sources[] = { 
