@@ -3,14 +3,17 @@ from __future__ import division
 import numpy as np
 import ROOT
 
+from matplotlib import pyplot as plt
+
 
 def single_fit(
         spec, 
         fix=list(), 
-        scales=dict(), 
-        shifts=dict(), 
+        scales=list(), 
+        values=list(), 
         randomize=False, 
-        nmax=100):
+        nmax=100,
+        tol=1e-2):
     """
     Perform a single fit using TMinuit.
 
@@ -18,10 +21,10 @@ def single_fit(
         sepectrum object to use in the fit
     :param fix: [str]
         name of parameters to fix in the fit
-    :param scales {str: float}
-        map parameter names to a scale to use for that parameter
-    :param shifts {str: float}
-        map parameter names to a shifted central value to use for it
+    :param scales [float]
+        custom scales
+    :param values [float]
+        custom central values
     :param randomize: bool
         randomize initial starting parameter values
     :param nmax: int
@@ -31,34 +34,35 @@ def single_fit(
     """
     # Do a vanilla fit (don't randomize parameters)
     minimizer = spec.build_minimizer()
-
-    # Fix parameters not floating in fit
-    for par in fix:
-        minimizer.FixVariable(spec.ipar(par))
-    # Quick lookup by index
-    fit_fix = set([spec.ipar(p) for p in fix])
+    minimizer.SetTolerance(tol)
 
     # Revised scales for all parameters
-    fit_scales = list(spec.scales)
-    for par, scale in scales.items():
-        fit_scales[spec.ipar(par)] = scale
-        minimizer.SetVariableStepSize(spec.ipar(par), scale)
+    if scales:
+        for i in range(spec.npars):
+            minimizer.SetVariableStepSize(i, scales[i])
+        scales = list(scales)
+    else:
+        scales = list(spec.scales)
+
+    # Fix parameters not floating in fit, and set their scales to 0 so they
+    # don't get randomized
+    for par in fix:
+        ipar = spec.ipar(par)
+        minimizer.FixVariable(ipar)
+        scales[ipar] = 0
 
     # Revised central values for all parameters
-    fit_centres = list(spec.central)
-    for par, shifted in shifts.items():
-        fit_centres[spec.ipar(par)] = shifted
-        minimizer.SetVariableValue(spec.ipar(par), shifted)
+    if values:
+        for i in range(spec.npars):
+            minimizer.SetVariableValue(i, values[i])
+    else:
+        values = spec.central
 
     if randomize:
-        # Randomize initial values
-        for ipar in range(spec.npars):
-            if ipar in fit_fix:
-                continue
-            minimizer.SetVariableValue(
-                ipar, 
-                fit_centres[ipar] + 
-                np.random.randn()*fit_scales[ipar])
+        x = list(values)
+        shifts = np.random.randn(spec.npars) * scales
+        for i in range(spec.npars):
+            minimizer.SetVariableValue(i, x[i]+shifts[i])
 
     # Attempt the fit, TMinuit will fail sometimes
     nfails = 0  # keep track of failed fits
@@ -66,6 +70,11 @@ def single_fit(
         nfails += 1
         if nfails >= nmax:
             raise RuntimeError("Failed minimization")
+        if randomize:
+            x = list(values)
+            shifts = np.random.randn(spec.npars) * scales
+            for i in range(spec.npars):
+                minimizer.SetVariableValue(i, x[i]+shifts[i])
 
     minx = [minimizer.X()[i] for i in range(spec.npars)]
     ll = spec.ll(minx)
@@ -117,7 +126,7 @@ def global_fit(spec, nfits=10, nmax=100, **kwargs):
     return best_x, best_ll, best_min
 
 
-def run_minos(spec, minimizer, pars=list()):
+def run_minos(spec, minimizer, pars=list(), verbose=False):
     """
     Find the points along each parameter value where the log likelihood is
     halved. For a normal distribution, this is the 1-sigma interval containing
@@ -129,6 +138,8 @@ def run_minos(spec, minimizer, pars=list()):
         minimier object which has found a minimum
     :param pars: [str]
         list of parameters on which to run Minos, or all if list is empty
+    :param verbose: bool
+        print information about parameter evaluations
     :return: [float], [float]
         distance to subtract and add to halve the log likelihood
     """
@@ -144,19 +155,22 @@ def run_minos(spec, minimizer, pars=list()):
     down = ROOT.Double(0)
     up = ROOT.Double(0)
 
-    for ipar, par in enumerate(pars):
+    for i, par in enumerate(pars):
+        ipar = spec.ipar(par)
         if minimizer.GetMinosError(ipar, down, up):
             # Note: important to cast the copy the ROOT variable, otherwise
             # the list will contain a reference to the value, which will change
-            fit_down[ipar] = float(down)
-            fit_up[ipar] = float(up)
+            fit_down[i] = float(down)
+            fit_up[i] = float(up)
         else:
             warnings.warn("Minos failed on %s" % par, RuntimeWarning)
+        if verbose:
+            print('...%s: %+.2e, %+.2e' % (par, float(down), float(up)))
 
     return fit_down, fit_up
 
 
-def find_minima(spec, nsample=100, tol=1e-2):
+def find_minima(spec, nsample=100, tol=1e-2, verbose=False, **kwargs):
     """
     Find individual local minima in the space.
 
@@ -165,10 +179,12 @@ def find_minima(spec, nsample=100, tol=1e-2):
     :param tol: float
         consider two log likelihoods belong to different minima if they differ
         by more than this value
-    :return: [float], [float], [float], float
+    :param verbose: bool
+        print information about fit success
+    :return: [float], [[float]], [[float]], float
         log likelihood at each minimum
-        fit values at each minimum
-        fit difference to the global minimum, scaled by uncertainty
+        fit values of parameters at each minimum
+        differenc of fit values to global minimum, scaled by uncertainty
         probability of finding the global minimum given a random initial point
     """
     if nsample <= 0:
@@ -180,14 +196,34 @@ def find_minima(spec, nsample=100, tol=1e-2):
     best_ll = float('-inf')
     best_min = None   # keep track of the minimizer that reaches global
 
-    for isample in range(nsample):
-        minx, ll, minimizer = single_fit(spec, randomize=True)
+    isample = 0
+    nfails = 0
+    while isample < nsample:
+        try:
+            minx, ll, minimizer = single_fit(
+                spec, 
+                randomize=True if isample > 0 else False, 
+                nmax=1, 
+                tol=tol,
+                **kwargs)
+            if verbose:
+                print("...sample %d: %.2e" % (isample, ll))
+        except RuntimeError:
+            if verbose:
+                print("...fit failed")
+            nfails += 1
+            continue
+
+        isample += 1
         xs.append(minx)
         lls.append(ll)
 
         if ll > best_ll:
             best_min = minimizer
             best_ll = ll
+
+    if verbose:
+        print("...failure rate: %.2e" % (nfails/float(nsample+nfails)))
 
     # Compute the error for each parameter
     if not best_min.Hesse():
@@ -278,14 +314,76 @@ def slice2d(
     return np.array(lls)
 
 
-def profile(spec, x, par, low=None, high=None, nsteps=100):
+def profile(
+        spec, 
+        par, 
+        low=None, 
+        high=None, 
+        nsteps=100,
+        **kwargs):
     ipar = spec.ipar(par)
     low, high = _make_bounds(spec, ipar, low, high)
     vals = np.linspace(low, high, nsteps)
 
-    lls = list()
-    for i, val in enumerate(vals):
-        _, ll, _ = single_fit(spec, fix=[par], shifts={par: val})
-        lls.append((val, ll))
+    best, best_ll, minimizer = single_fit(spec, **kwargs)
 
-    return np.array(lls)
+    minimizer.FixVariable(ipar)
+
+    lls = list()
+    new_ll = best_ll
+    new_x = best
+    for i, val in enumerate(vals):
+        minimizer.SetVariableValue(ipar, val)
+
+        if not minimizer.Minimize():
+            continue
+
+        minx = [minimizer.X()[i] for i in range(spec.npars)]
+        ll = spec.ll(minx)
+        if ll > new_ll:
+            new_ll = ll
+            new_x = minx
+        print(val, ll)
+        lls.append((val, np.exp(ll)))
+
+    return np.array(lls[1:])
+
+
+def covm(minimizer):
+    npars = int(minimizer.NDim())
+    return np.array(
+        [[minimizer.CovMatrix(i,j) 
+        for j in range(npars)]
+        for i in range(npars)])
+
+
+def corrcoef(covm):
+    covm = np.asarray(covm)
+    sigs = np.diag(covm)**0.5  # grab the stdevs
+
+    norms = np.copy(sigs)  # normalization for correlation matrix
+    norms[~(sigs>0)] = 1  # ignore parameters with no var
+    # Build correlation matrix
+    corr = covm / (norms[np.newaxis, :] * norms[:, np.newaxis])
+
+    return corr
+
+
+def smallcorr(covm, ipois, threshold=0.01):
+    corr = corrcoef(covm)
+
+    np.set_printoptions(precision=3, suppress=True)
+    
+    # Select rows for the POIs only
+    corr = corr[ipois]
+    # Array of True where the correlation between a POI (row) and another
+    # parameter (col) is below threshold
+    below = np.fabs(corr) < threshold
+    # Find columns that are always below threshold: parameters that don't
+    # correlate strongly to any POI
+    below = np.all(below, axis=0)
+
+    for ipar in range(len(below)):
+        print("%+.3f  %+.3f  %s" % (corr[0][ipar], corr[1][ipar], below[ipar]))
+
+    return np.arange(len(below))[below]
