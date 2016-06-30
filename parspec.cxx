@@ -41,7 +41,6 @@ public:
   /** Compute the spectrum for the given parameters */
   void Compute(const double* _x, double* _spec) const {
     std::memset(_spec, 0, _ncols*sizeof(double));
-    // Assign parameter values to named variables
     __PARS__
     // Compute factors for each source
     const double _factors[] = { __FACTORS__ };
@@ -66,11 +65,12 @@ public:
 
   /** Compute the log likelihood and gradient together */
   void FdF(const double* _x, double& _f, double* _df) const {
+    // number of entries in each column (the spectrum)
     double _spec[_ncols] = { 0 };
+    // gradient of each column content w.r.t. to each parameter
     double _grads[_ncols*_ndims] = { 0 };
     _f = 0;
     std::memset(_df, 0, _ndims*sizeof(double));
-    // Assign parameter values to nammed variables
     __PARS__
     // Compute factors for each source
     const double _factors[] = { __FACTORS__ };
@@ -80,10 +80,10 @@ public:
     const unsigned _rownpars[] = { __ROWNPARS__ };
     // List of parameter indices for each row
     const unsigned _rowpars[] = { __ROWPARS__ };
-    // Gradient of the likelihood w.r.t. each paraemeter
+    // Gradient of each source factor w.r.t. each paraemeter
     const double _pargrads[] = { __PARGRADS__ };
     unsigned _ipars = 0;
-    // Compute spectrum without gradients
+    // Compute spectrum with gradients
     for (unsigned _i = 0; _i < _nrows; _i++) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
         _spec[_j] += 
@@ -133,8 +133,6 @@ private:
     double _f = 0;
     double _spec[_ncols] = { 0 };
     Compute(_x, _spec);
-    // Assign parameter values to nammed variables
-    __PARS__
     // Compute log likelihood without gradients
     __LL__
     if (_negative) _f *= -1;
