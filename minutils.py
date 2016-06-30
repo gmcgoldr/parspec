@@ -202,7 +202,7 @@ def find_minima(spec, nsample=100, tol=1e-2, verbose=False, **kwargs):
         try:
             minx, ll, minimizer = single_fit(
                 spec, 
-                randomize=True if isample > 0 else False, 
+                randomize=True if nfails+isample>0 else False, 
                 nmax=1, 
                 tol=tol,
                 **kwargs)
