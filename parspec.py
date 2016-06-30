@@ -9,6 +9,15 @@ import ROOT
 # starting with underscores
 _name_re = re.compile(r'^[a-zA-Z][a-zA-Z0-9_]*$')
 
+_build_path = ''
+def set_build_path(path):
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    ROOT.gSystem.SetBuildDir(path)
+    global _build_path
+    _build_path = path
+
 
 def _load_code():
     """Load the C++ template code from the same path as this file"""
@@ -216,7 +225,6 @@ class ParSpec(object):
 
         # When the LL is halved, 1 sigma is reached
         minimizer.SetErrorDef(0.5)
-        minimizer.SetTolerance(1e-2)
 
         return minimizer
 
@@ -428,7 +436,9 @@ class SpecBuilder(object):
                 self._pars |= set(self._stat_pars)
             # Count this source's contents towards stat uncertainty. Scale the
             # relative uncertainty into the counts for proper summing.
-            self._stat_scales += 1./source._stat_errs**2
+            non_zero_errs = source._stat_errs > 0
+            self._stat_scales[non_zero_errs] += \
+                1./source._stat_errs[non_zero_errs]**2
 
     def set_prior(self, name, central, low=None, high=None):
         """
@@ -495,12 +505,6 @@ class SpecBuilder(object):
         code = _base_code
 
         code_pars = list()  # code assigns parameters to variables
-        for ipar, par in enumerate(pars):
-            code_pars.append(
-                'const double %s = _x[%d];' % (par, ipar))
-        # If stattistical parameters are used, they are all sorted together,
-        # and occupy a continous block of the parameters. Get the address to
-        # the start of the block using the first stat par name.
         if self._stat_pars:
             code_pars.append(
                 'const double* _stats = _x + %d;' % 
@@ -524,7 +528,7 @@ class SpecBuilder(object):
             code_factors.append(source._expr if source._expr else '1')
             code_usestats.append('1' if len(source._stat_errs) else '0')
             code_rownpars.append(0)
-            # Add code to compute gradients of each spectrum bin w.r.t to
+            # Add code to compute gradients of each source factor w.r.t to
             # the parameters in the factor expression for this source
             for par, grad in zip(source._pars, source._grads):
                 code_rownpars[-1] += 1
@@ -605,6 +609,10 @@ class SpecBuilder(object):
         code = code.replace('__LL__', '\n%s\n' % ('\n'.join(code_ll)))
         code = code.replace('__GLL__', '\n%s\n' % ('\n'.join(code_gll)))
 
+        # replace named variables by parameter id
+        for ipar, par in enumerate(pars):
+            code = re.sub(r'(?<=[^\w\d])%s(?=\W)'%par, '_x[%d]'%ipar, code)
+
         sources_data = ',\n'.join([
             ', '.join(['%.7e' % v for v in s._data])
             for s in self._sources])
@@ -612,12 +620,13 @@ class SpecBuilder(object):
 
         # Write out the generated code
         code_file = 'comp_parspec_%s.cxx' % self.name
+        code_path = os.path.join(_build_path, code_file)
         code_exists = False
 
         # First, check if identical file exists, in which case it might already
         # be compiled, and no need to re-compile
         try:
-            with open(code_file, 'r') as fin:
+            with open(code_path, 'r') as fin:
                 old_code = fin.read()
                 if old_code == code:
                     code_exists = True
@@ -625,13 +634,13 @@ class SpecBuilder(object):
             pass
 
         if not code_exists:
-            with open(code_file, 'w') as fout:
+            with open(code_path, 'w') as fout:
                 fout.write(code)
 
         # Ask ROOT to compile and link the code
         prev_level = ROOT.gErrorIgnoreLevel
         ROOT.gErrorIgnoreLevel = ROOT.kWarning
-        if ROOT.gROOT.LoadMacro(code_file+'+') != 0:
+        if ROOT.gROOT.LoadMacro(code_path+'+') != 0:
             raise RuntimeError("Unable to compile macro")
         ROOT.gErrorIgnoreLevel = prev_level
         # Grab the spectrum constructor from the compiled code
