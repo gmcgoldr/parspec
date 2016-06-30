@@ -140,7 +140,7 @@ def build_template_meas(name='example'):
     # Add a source for the signal
     src_sig = meas.new_source('sig', sig)
     src_sig.use_lumi()  # impacted by luminosity
-    src_sig.use_stats(1./(10*sig)**0.5)  # stat unc. from 10x MC
+    src_sig.use_stats(.1*(10*sig)**0.5)  # stat unc. from 10x MC
     src_sig.set_xsec(1, 0.95, 1.05)  # cross section constrained to +/-5%
     # Add a template: under the influence of parameter p, a linear slope is
     # added to the signal
@@ -157,7 +157,7 @@ def build_template_meas(name='example'):
     bg1 = np.array([1600, 1300, 1000, 1000, 1000], dtype=float)
     src_bg1 = meas.new_source('bg1', bg1)
     src_bg1.use_lumi()
-    src_bg1.use_stats(1./(10*bg1)**0.5)
+    src_bg1.use_stats(.1/(10*bg1)**0.5)
     src_bg1.set_xsec(1, 0.8, 1.1)
     # It is also impacted by systematic 2
     src_bg1.add_syst('s2', bg1*[1.02, 1.01, 1, 1.01, 1.02])
@@ -463,6 +463,7 @@ if __name__ == '__main__':
     print("Building measurement...")
     meas = build_template_meas()
 
+    print("Assessing minima...")
     asses_space(meas)
 
     print("Drawing spectrum...")
