@@ -106,7 +106,19 @@ public:
     // Poisson likelihoods
     for (unsigned _j = 0; _j < _ncols; _j++)
       _spec[_j] = std::max(1., _spec[_j]);
-    // Compute the log likelihood and gradient of ll w.r.t. parameters
+    // gradient of ll w.r.t. each parameter
+    for (unsigned _j = 0; _j < _ncols; _j++) {
+      // log likelihood contributions from each column
+      _f += -0.5 * std::pow(_spec[_j]-_data[_j],2) / _spec[_j];
+      // graduient of ll due to s, a change in spectrum column _j
+      const double dllds = 
+          0.5*std::pow(_spec[_j]-_data[_j],2)/std::pow(_spec[_j],2) - 
+          (_spec[_j]-_data[_j])/_spec[_j];
+      // dll/dp = dll/ds * ds/dp where p is parameter _i
+      for (unsigned _i = 0; _i < _ndims; _i++)
+        _df[_i] += _grads[_i*_ncols+_j] * dllds;
+    }
+    // User defined likelihood contributions and gradients
     __GLL__
     if (_negative) {
       _f *= -1;
@@ -133,7 +145,8 @@ private:
     double _f = 0;
     double _spec[_ncols] = { 0 };
     Compute(_x, _spec);
-    // Compute log likelihood without gradients
+    for (unsigned _j = 0; _j < _ncols; _j++)
+      _f += -0.5 * std::pow(_spec[_j]-_data[_j],2) / _spec[_j];
     __LL__
     if (_negative) _f *= -1;
     return _f;

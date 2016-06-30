@@ -544,27 +544,6 @@ class SpecBuilder(object):
         code_ll = list()   # code computes the log likelihood
         code_gll = list()  # code computes the log likelihood and gradients
 
-        # Compute the log likelihood of the data, given the true values in the
-        # spectrum bins (approximation of the Poisson probability)
-        code_ll.append(
-            'for (unsigned i = 0; i < _ncols; i++) {\n'
-            '  _f += -0.5 * std::pow(_spec[i]-_data[i],2) / _spec[i];')
-        # Use this also when computing gradients
-        code_gll.append(code_ll[-1])
-        # Compute the gradient of ll w.r.t. to each parameter using chain rule:
-        # dll/dp = dll/db db/dp, where ll is the log likelihood, b is a bin
-        # value and p is parameter (b is a function of p). _grads[j*_ncols_i]
-        # gives the db/dp for parater j and spectrum bin i
-        for par in self._pars:
-            code_gll.append(
-                '  _df[%d] += '
-                '( 0.5*std::pow(_spec[i]-_data[i],2)/std::pow(_spec[i],2) '
-                '- (_spec[i]-_data[i])/_spec[i] ) * '
-                '_grads[%d*_ncols+i];' % 
-                (ipars[par], ipars[par]))
-        code_ll.append('}')
-        code_gll.append(code_ll[-1])
-
         # stat_scales is the count of events in each column with a stat.
         # uncertainty. The total in that column can change by n/sqrt(n)
         # with a 1 sigma penalty. Scale for fraction is just 1/n
