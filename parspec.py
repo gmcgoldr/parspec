@@ -163,6 +163,19 @@ class ParSpec(object):
         self._obj.Compute(x, vals)
         return vals
 
+    def specstats(self, x):
+        """
+        Compute the spectrum for the given parameters.
+
+        :param x: [float]
+            list of parameter values
+        """
+        x = self._prep_pars(x)
+        vals = np.zeros(self._ncols, dtype=np.float64)
+        stats = np.zeros(self._ncols, dtype=np.float64)
+        self._obj.Compute(x, vals, stats)
+        return vals, stats**0.5
+
     def nll(self, x):
         """
         Compute the negative log likelihood for the given parameters.
@@ -261,7 +274,7 @@ class Source(object):
         # List of variables names used in computing this source factor
         self._pars = list()
         # Relative statistical uncertainty on the count in each bin
-        self._stat_errs = np.array([], dtype='float64')
+        self._stats = np.zeros(len(data), dtype='float64')
 
         # Inherit the expresion from the shapeof
         if shapeof:
@@ -365,7 +378,9 @@ class Source(object):
         :param err: [float]
             statistical error on each bin
         """
-        self._stat_errs = np.array(errs, dtype='float64')
+        if len(errs) != len(self._stats):
+            raise ValueError("Provided errors don't match data")
+        self._stats = np.array(errs, dtype='float64')
 
 
 class SpecBuilder(object):
@@ -395,8 +410,6 @@ class SpecBuilder(object):
         # Number of columns determined from first source added
         self._ncols = None
 
-        # Contributions from each source to stat. uncertainty
-        self._source_stats = list()
         # Remember the stat parameter names explicitey
         self._stat_pars = list()
 
@@ -423,17 +436,13 @@ class SpecBuilder(object):
         # Keep the set of all parameter names
         self._pars |= set(source._pars)
 
-        if len(source._stat_errs) > 0:
-            if len(source._stat_errs) != self._ncols:
-                raise RuntimeError("Source bin stats doesn't match spectrum")
-            if not self._stat_pars:
-                # Setup parameter names for each bin uncertainty. Make sure
-                # they sort alphanumerically, so pad with enough zeros
-                nzeros = str(int(math.log10(self._ncols))+1)
-                self._stat_pars = [
-                    ('stat%0'+nzeros+'d') % i for i in range(self._ncols)]
-                self._pars |= set(self._stat_pars)
-            self._source_stats.append(list(source._stat_errs))
+        if len(source._stats) > 0 and not self._stat_pars:
+            # Setup parameter names for each bin uncertainty. Make sure
+            # they sort alphanumerically, so pad with enough zeros
+            nzeros = str(int(math.log10(self._ncols))+1)
+            self._stat_pars = [
+                ('stat%0'+nzeros+'d') % i for i in range(self._ncols)]
+            self._pars |= set(self._stat_pars)
 
     def set_prior(self, name, central, low=None, high=None):
         """
@@ -499,20 +508,7 @@ class SpecBuilder(object):
 
         code = _base_code
 
-        code_pars = list()  # code assigns parameters to variables
-        if self._stat_pars:
-            code_pars.append(
-                'const double* _stats = _x + %d;' % 
-                ipars[self._stat_pars[0]])
-            code_pars.append(
-                'const unsigned _istats = %d;' %
-                ipars[self._stat_pars[0]])
-        else:
-            code_pars.append('const double* _stats = 0;')
-            code_pars.append('const unsigned _istats = 0;')
-
         code_factors = list()
-        code_usestats = list()
         code_rowpars = list()
         code_rownpars = list()
         code_pargrads = list()
@@ -521,7 +517,6 @@ class SpecBuilder(object):
         for irow, source in enumerate(self._sources):
             # Expression to evaluate source factor
             code_factors.append(source._expr if source._expr else '1')
-            code_usestats.append('1' if len(source._stat_errs) else '0')
             code_rownpars.append(0)
             # Add code to compute gradients of each source factor w.r.t to
             # the parameters in the factor expression for this source
@@ -531,17 +526,12 @@ class SpecBuilder(object):
                 code_pargrads.append(grad)
 
         code_factors = ',\n'.join(code_factors)
-        code_usestats = ', '.join(code_usestats)
         code_rowpars = ', '.join(code_rowpars)
         code_rownpars = ', '.join(map(str, code_rownpars))
         code_pargrads = ',\n'.join(code_pargrads)
 
         code_ll = list()   # code computes the log likelihood
         code_gll = list()  # code computes the log likelihood and gradients
-
-        stat_scales = np.sum(self._source_stats, axis=0)
-        for par, scale in zip(self._stat_pars, stat_scales):
-            self._priors[par] = (0, -scale, +scale)
 
         # Add constraint terms for regularizations
         for rexpr, rpars, rgrads in self._regularizations:
@@ -555,9 +545,8 @@ class SpecBuilder(object):
         code = code.replace('__NROWS__', str(len(self._sources)))
         code = code.replace('__NCOLS__', str(self._ncols))
         code = code.replace('__NDIMS__', str(len(pars)))
-        code = code.replace('__PARS__', '\n%s\n' % ('\n'.join(code_pars)))
+        code = code.replace('__ISTATS__', str(ipars[self._stat_pars[0]]))
         code = code.replace('__FACTORS__', '\n%s\n' % code_factors)
-        code = code.replace('__USESTATS__', '\n%s\n' % code_usestats)
         code = code.replace('__PARGRADS__', '\n%s\n' % code_pargrads)
         code = code.replace('__ROWNPARS__', '\n%s\n' % code_rownpars)
         code = code.replace('__ROWPARS__', '\n%s\n' % code_rowpars)
@@ -595,6 +584,12 @@ class SpecBuilder(object):
             for s in self._sources])
         code = code.replace('__SOURCES__', sources_data)
 
+        # Statistics for each data bin (statistical uncertainty squared)
+        source_stats_data = ',\n'.join([
+            ', '.join(['%.7e' % v**2 for v in s._stats])
+            for s in self._sources])
+        code = code.replace('__SOURCESTATS__', source_stats_data)
+
         # Write out the generated code
         code_file = 'comp_parspec_%s.cxx' % self.name
         code_path = os.path.join(_build_path, code_file)
@@ -627,6 +622,7 @@ class SpecBuilder(object):
         central = [0] * len(pars)
         lows = [0] * len(pars)
         highs = [0] * len(pars)
+
         # Tell the spectrum about the central value of constrained parameters
         for par in self._priors:
             ipar = ipars[par]
@@ -639,6 +635,16 @@ class SpecBuilder(object):
             else:
                 lows[ipar] = central[ipar]
                 highs[ipar] = central[ipar]
+
+        # Add some prior information for statistical parameters based on nominal
+        stat_priors = np.zeros(self._ncols, float)
+        for source in self._sources:
+            stat_priors += source._stats
+        for istat, par in enumerate(self._stat_pars):
+            ipar = ipars[par]
+            central[ipar] = 0
+            lows[ipar] = -stat_priors[istat]
+            highs[ipar] = stat_priors[istat]
 
         return ParSpec(
             self.name,

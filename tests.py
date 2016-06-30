@@ -144,6 +144,8 @@ class TestParSpec(unittest.TestCase):
         """Check if the spectrum returns the correct scales"""
         # Check for all parameters
         for par in self.spec.pars:
+            if par.startswith('stat'):
+                continue
             ipar = self.spec.ipar(par)
             if par in self.builder._priors:
                 # Constrained parameters are scaled by constraint
@@ -165,6 +167,8 @@ class TestParSpec(unittest.TestCase):
         """Check if the spectrum returns the correct information"""
         # Check for all parameters
         for ipar, par in enumerate(self.spec.pars):
+            if par.startswith('stat'):
+                continue
             info = self.spec.parinfo(par)
             # Should work with indices as well
             self.assertEqual(info, self.spec.parinfo(ipar))
@@ -182,7 +186,7 @@ class TestParSpec(unittest.TestCase):
                 self.assertAlmostEqual(
                     info['high'], self.builder._priors[par][2])
 
-    def test_stats(self):
+    def test_stat_pars(self):
         """Check that statistical uncertainties are appropriate"""
         stat_pars = [p for p in self.spec.pars if p.startswith('stat')]
         # The signal source bin counts
@@ -194,7 +198,15 @@ class TestParSpec(unittest.TestCase):
             n = 2*contents[ibin]
             rel_err = n**0.5 / n
             self.assertAlmostEqual(
+                self.spec.parinfo(par)['central'], 0)
+            self.assertAlmostEqual(
+                self.spec.parinfo(par)['low'],
+                -contents[ibin]*rel_err)
+            self.assertAlmostEqual(
                 self.spec.parinfo(par)['high'],
+                contents[ibin]*rel_err)
+            self.assertAlmostEqual(
+                self.spec.scales[self.spec.ipar(par)],
                 contents[ibin]*rel_err)
 
     def test_spec_nom(self):
@@ -309,6 +321,17 @@ class TestParSpec(unittest.TestCase):
         comp = self.spec(pars)
         np.testing.assert_array_almost_equal(true, comp)
 
+    def test_stats_varied(self):
+        """Check stats with all parameters varied is as expected"""
+        true = (
+            # use 0.5 effective stats from sig, with its scaling
+            0.8*1.2 * (0.5*self.builder._sources[0]._data)**0.5
+        )
+        pars = list(self.spec.central)
+        self.move_pars(pars)
+        _, comp = self.spec.specstats(pars)
+        np.testing.assert_array_almost_equal(true, comp)
+
     def test_ll_nom(self):
         """Check the nominal log likelihood is as expected"""
         # Nominal spectrum with central parameters should have 0 ll
@@ -352,6 +375,11 @@ class TestParSpec(unittest.TestCase):
                 bound = self.spec.parinfo(par)['high']
             else:
                 bound = self.spec.parinfo(par)['low']
+            # Statistical parameters scale with xsec_sig and lumi
+            if par.startswith('stat'):
+                bound *= (
+                    pars[self.spec.ipar('xsec_sig')] * 
+                    pars[self.spec.ipar('lumi')])
             ll += -0.5 * \
                 (pars[ipar]-centre[ipar])**2 / \
                 (bound-centre[ipar])**2
