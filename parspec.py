@@ -62,13 +62,31 @@ class ParSpec(object):
         self._npars = len(self._pars)
         self._ncols = ncols
         self._obj = obj
+
         # Note: used internally, don't return as it is mutable
-        self._bounds = np.array([lows, highs], dtype='float64').T
         self._central = tuple(np.array(central, dtype='float64'))
+
+        lows = np.array(lows)
+        highs = np.array(highs)
+
+        # Compute the effective stats with default parameters
+        x = np.array(self._central)
+        vals = np.zeros(self._ncols, dtype=np.float64)
+        stats = np.zeros(self._ncols, dtype=np.float64)
+        self._obj.Compute(x, vals, stats)
+        istats = [
+            i 
+            for i in range(self._npars) 
+            if self._pars[i].startswith('stat')]
+        lows[istats] = -stats**0.5
+        highs[istats] = stats**0.5
+
+        self._bounds = np.array([lows, highs], dtype='float64').T
         self._scales = tuple(0.5 * (self._bounds[:, 1] - self._bounds[:, 0]))
         self._unconstrained = tuple(
             [p for i, p in enumerate(self._pars) 
             if self._scales[i] == 0])
+
         # At this point, it's worth ensuring that all scales are posiitve
         assert(not np.any(np.array(self._scales) < 0))
 
@@ -636,15 +654,7 @@ class SpecBuilder(object):
                 lows[ipar] = central[ipar]
                 highs[ipar] = central[ipar]
 
-        # Add some prior information for statistical parameters based on nominal
-        stat_priors = np.zeros(self._ncols, float)
-        for source in self._sources:
-            stat_priors += source._stats
-        for istat, par in enumerate(self._stat_pars):
-            ipar = ipars[par]
-            central[ipar] = 0
-            lows[ipar] = -stat_priors[istat]
-            highs[ipar] = stat_priors[istat]
+        # NOTE: statistical parameter priors computed on construction
 
         return ParSpec(
             self.name,

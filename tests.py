@@ -45,6 +45,8 @@ class TestParSpec(unittest.TestCase):
         sig_syst1 = [0, 50, 50 , 50, 0]
         # This is a shape which inherits the normalization from the signal
         src_sig_syst1_up = Source(sig_syst1, shapeof=src_sig)
+        # Assume 1:1 statistical uncertainty on this shape
+        src_sig_syst1_up.use_stats(np.array(sig_syst1)**0.5)
         # Control the amount of this variation with the parameter syst1, and
         # indicate that the shape applies only if syst1 >= 0. Note that 
         # parameter list and gradients can be omitted for simple sums
@@ -325,8 +327,12 @@ class TestParSpec(unittest.TestCase):
         """Check stats with all parameters varied is as expected"""
         true = (
             # use 0.5 effective stats from sig, with its scaling
-            0.8*1.2 * (0.5*self.builder._sources[0]._data)**0.5
+            (0.8*1.2)**2 * (0.5*self.builder._sources[0]._data) +
+            # use 1 effective stats from syst1, with its scaling
+            (0.8*1.2*0.2)**2 * (self.builder._sources[1]._data)
         )
+        # sum in quadrature
+        true = np.array(true)**0.5
         pars = list(self.spec.central)
         self.move_pars(pars)
         _, comp = self.spec.specstats(pars)
@@ -362,7 +368,8 @@ class TestParSpec(unittest.TestCase):
         centre = self.spec.central
         pars = np.copy(centre)
         self.move_pars(pars)
-        data = self.spec(pars)  # data includes shift, so only reg. penalty
+        # Data includes the shifts, so penalty will be only due to priors
+        data, stats = self.spec.specstats(pars)
         self.spec.set_data(data)
         ll = 0
         for par in self.spec.pars:
@@ -375,11 +382,10 @@ class TestParSpec(unittest.TestCase):
                 bound = self.spec.parinfo(par)['high']
             else:
                 bound = self.spec.parinfo(par)['low']
-            # Statistical parameters scale with xsec_sig and lumi
+            # Statistical parameters bounds change with factors
             if par.startswith('stat'):
-                bound *= (
-                    pars[self.spec.ipar('xsec_sig')] * 
-                    pars[self.spec.ipar('lumi')])
+                istat = int(par[4:])
+                bound = stats[istat]
             ll += -0.5 * \
                 (pars[ipar]-centre[ipar])**2 / \
                 (bound-centre[ipar])**2
