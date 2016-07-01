@@ -3,6 +3,29 @@ import ROOT
 
 import parspec
 
+
+def estimate_stats(data):
+    # copy into a proper array
+    data = np.array(data)
+    # copy into a strided array, grouping 3 bins at a time
+    data = np.array(np.lib.stride_tricks.as_strided(
+        x=data,
+        shape=(
+            len(data)-3+1,
+            3), 
+        strides=(
+            data.dtype.itemsize,
+            data.dtype.itemsize)))
+    # fit each set of 3 points, using the same x coodrinates
+    x = np.array([-1, 0, 1], dtype=float)
+    m, b = np.polyfit(x, data.T, 1)
+    # compute the projected values given the fit parameters
+    y = m[:, np.newaxis]*x[np.newaxis, :] + b[:, np.newaxis]
+    # the standard deviation of the difference should ressemble statistical
+    # uncertainty
+    return np.std(data-y)
+
+
 class TemplateSource(object):
     """
     Accumulate information for a source process to the spectrum. Note that by
@@ -58,7 +81,7 @@ class TemplateSource(object):
         """
         self._stat_errs = list(errs)
 
-    def add_syst(self, name, data, polarity=None):
+    def add_syst(self, name, data, polarity=None, usestate=True):
         """
         Add a systematic variation to this source. This adds a parameter to
         the spectrum (or re-uses the parameter if the systematic name has been
@@ -75,6 +98,8 @@ class TemplateSource(object):
         :param polarity: {'up', 'down'}
             this shape applies only if the systematic parameter is positive
             for 'up', or negative for 'down'
+        :param usestats: bool
+            estimate statistical variance and use it when building the model
         """
         if polarity is not None and polarity not in ['up', 'down']:
             raise ValueError("Unrecognized polarity %s" % polarity)
@@ -82,7 +107,14 @@ class TemplateSource(object):
         data = np.array(data) - self._data
         if polarity == 'down':
             data *= -1
-        self._systematics.append((name, data, polarity))
+
+        if usestats:
+            stat_sig = estimate_stats(data)
+            stats = [stat_sig]*len(data)
+        else:
+            stats = None
+
+        self._systematics.append((name, data, polarity, stats))
 
     def add_template(self, expr, data, pars=None, grads=None):
         """
@@ -186,6 +218,8 @@ class TemplateMeasurement(object):
             for syst in temp_src._systematics:
                 syst_name = 'syst_%s' % syst[0]
                 src = parspec.Source(syst[1], shapeof=par_src)
+                if syst[3] is not None:
+                    src.use_stats(syst[3])
                 src.set_expression(syst_name, polarity=syst[2])
                 builder.add_source(src)
 
