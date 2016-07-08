@@ -77,11 +77,11 @@ class TemplateSource(object):
         (i.e. the source is simulated with MC).
 
         :param err: [float]
-            relative statistical error on each bin
+            statistical error on each bin
         """
         self._stat_errs = list(errs)
 
-    def add_syst(self, name, data, polarity=None, usestate=True):
+    def add_syst(self, name, data, stats=None, polarity=None):
         """
         Add a systematic variation to this source. This adds a parameter to
         the spectrum (or re-uses the parameter if the systematic name has been
@@ -95,11 +95,12 @@ class TemplateSource(object):
         :param data: [float]
             values of the spectrum when the systematic parameter takes on a
             value of +/- 1 sigma (depends on given polarity)
+        :param stats: [float]
+            statistical uncertainty on the *difference* of each bin under the
+            influence of the systematic shape
         :param polarity: {'up', 'down'}
             this shape applies only if the systematic parameter is positive
             for 'up', or negative for 'down'
-        :param usestats: bool
-            estimate statistical variance and use it when building the model
         """
         if polarity is not None and polarity not in ['up', 'down']:
             raise ValueError("Unrecognized polarity %s" % polarity)
@@ -107,12 +108,6 @@ class TemplateSource(object):
         data = np.array(data) - self._data
         if polarity == 'down':
             data *= -1
-
-        if usestats:
-            stat_sig = estimate_stats(data)
-            stats = [stat_sig]*len(data)
-        else:
-            stats = None
 
         self._systematics.append((name, data, polarity, stats))
 
