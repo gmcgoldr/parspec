@@ -70,14 +70,13 @@ class ParSpec(object):
         highs = np.array(highs)
 
         # Compute the effective stats with default parameters
+        istats = [
+            i for i in range(self._npars) 
+            if self._pars[i].startswith('stat')]
         x = np.array(self._central)
         vals = np.zeros(self._ncols, dtype=np.float64)
         stats = np.zeros(self._ncols, dtype=np.float64)
         self._obj.Compute(x, vals, stats)
-        istats = [
-            i 
-            for i in range(self._npars) 
-            if self._pars[i].startswith('stat')]
         lows[istats] = -stats**0.5
         highs[istats] = stats**0.5
 
@@ -183,7 +182,7 @@ class ParSpec(object):
 
     def specstats(self, x):
         """
-        Compute the spectrum for the given parameters.
+        Compute the spectrum and statistics for the given parameters.
 
         :param x: [float]
             list of parameter values
@@ -575,6 +574,13 @@ class SpecBuilder(object):
         for ipar, par in enumerate(pars):
             code = re.sub(r'(?<=[^\w\d])%s(?=\W)'%par, '_x[%d]'%ipar, code)
 
+        binary_data_path = os.path.join(
+            _build_path,
+            'data_parspec_%s.bin' % self.name)
+        binary_data = open(binary_data_path, 'wb')
+
+        code = code.replace('__DATAPATH__', binary_data_path)
+
         # Piror data to insert in the code
         prior0_data = ['0'] * len(pars)  # central value
         priorDown_data = ['0'] * len(pars)  # down scale
@@ -586,27 +592,25 @@ class SpecBuilder(object):
             if prior_vals is None:
                 continue
             # Update data for those that are regularized
-            prior0_data[ipar] = '%.7e' % prior_vals[0]
-            priorDown_data[ipar] = '%.7e' % (prior_vals[0]-prior_vals[1])
-            priorUp_data[ipar] = '%.7e' % (prior_vals[0]-prior_vals[2])
+            prior0_data[ipar] = prior_vals[0]
+            priorDown_data[ipar] = prior_vals[0]-prior_vals[1]
+            priorUp_data[ipar] = prior_vals[0]-prior_vals[2]
             priorMask_data[ipar] = '1'
-        # Insert the information in the code
-        code = code.replace('__PRIOR0__', ', '.join(prior0_data))
-        code = code.replace('__PRIORDOWN__', ', '.join(priorDown_data))
-        code = code.replace('__PRIORUP__', ', '.join(priorUp_data))
-        code = code.replace('__PRIORMASK__', ', '.join(priorMask_data))
+        # Write into the file
+        binary_data.write(np.array(prior0_data, dtype='float64'))
+        binary_data.write(np.array(priorDown_data, dtype='float64'))
+        binary_data.write(np.array(priorUp_data, dtype='float64'))
+        binary_data.write(np.array(priorMask_data, dtype='int32'))
 
         # Source data (spectrum contributions) to insert int he code
-        sources_data = ',\n'.join([
-            ', '.join(['%.7e' % v for v in s._data])
-            for s in self._sources])
-        code = code.replace('__SOURCES__', sources_data)
+        sources_data = [[v for v in s._data] for s in self._sources]
+        binary_data.write(np.array(sources_data, dtype='float64'))
 
         # Statistics for each data bin (statistical uncertainty squared)
-        source_stats_data = ',\n'.join([
-            ', '.join(['%.7e' % v**2 for v in s._stats])
-            for s in self._sources])
-        code = code.replace('__SOURCESTATS__', source_stats_data)
+        source_stats_data = [[v**2 for v in s._stats] for s in self._sources]
+        binary_data.write(np.array(source_stats_data, dtype='float64'))
+
+        binary_data.close()
 
         # Write out the generated code
         code_file = 'comp_parspec_%s.cxx' % self.name

@@ -1,8 +1,12 @@
 #include <iostream>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <cassert>
 
 #include <Math/IFunction.h>
 
@@ -19,12 +23,13 @@
  */
 class __NAME__ : public ROOT::Math::IGradientFunctionMultiDim {
 private:
-  static const double _prior0[];
-  static const double _priorDown[];
-  static const double _priorUp[];
-  static const bool _priorMask[];
-  static const double _sources[];
-  static const double _source_stats[];
+  void* _memory;
+  const double* _prior0;
+  const double* _priorDown;
+  const double* _priorUp;
+  const int* _priorMask;
+  const double* _sources;
+  const double* _source_stats;
   static const unsigned _nrows = __NROWS__;
   static const unsigned _ncols = __NCOLS__;
   static const unsigned _ndims = __NDIMS__;
@@ -34,7 +39,38 @@ private:
 
 public:
   __NAME__() : _negative(true) {
+    // open a file at a static location with binary data
+    FILE* fin = std::fopen("__DATAPATH__", "rb");
+    if (!fin) throw std::runtime_error("Binary data not found at __DATAPATH__");
+    // allocate the memory for all the dynamic data  
+    const size_t nbytes = 
+        _ndims*sizeof(double) +  // prior0 (one per parameter)
+        _ndims*sizeof(double) +  // priorDown
+        _ndims*sizeof(double) +  // priorUp
+        _ndims*sizeof(int) +    // priorMask
+        _nrows*_ncols*sizeof(double) +  // sources
+        _nrows*_ncols*sizeof(double);   // source_stats
+    _memory = std::malloc(nbytes);
+    if (!_memory) throw std::runtime_error("Unable to allocate memory");
+    // read all the dynamic data into a single block of memory
+    const size_t nread = std::fread(_memory, 1, nbytes, fin);
+    std::fclose(fin);
+    if (nread < nbytes) throw std::runtime_error("Unable to read binary data");
+    // set pointers to the various parts of that memory
+    size_t i = 0;
+    _prior0 = (double*)((char*)_memory+i); i += _ndims*sizeof(double)/sizeof(char);
+    _priorDown = (double*)((char*)_memory+i); i += _ndims*sizeof(double)/sizeof(char);
+    _priorUp = (double*)((char*)_memory+i); i += _ndims*sizeof(double)/sizeof(char);
+    _priorMask = (int*)((char*)_memory+i); i += _ndims*sizeof(int)/sizeof(char);
+    _sources = (double*)((char*)_memory+i); i += _nrows*_ncols*sizeof(double)/sizeof(char);
+    _source_stats = (double*)((char*)_memory+i); i += _nrows*_ncols*sizeof(double)/sizeof(char);
+    assert(i == nbytes/sizeof(char) && "Didn't account for all written data");
+    // initialize the on stack spectral data
     std::memset(_data, 0, _ncols*sizeof(double));
+  }
+
+  ~__NAME__() {
+    if (_memory) std::free(_memory);
   }
 
   void setData(double* data) {
@@ -207,26 +243,3 @@ private:
   }
 };
 
-const double __NAME__::_prior0[] = { 
-__PRIOR0__
-};
-
-const double __NAME__::_priorDown[] = { 
-__PRIORDOWN__
-};
-
-const double __NAME__::_priorUp[] = { 
-__PRIORUP__
-};
-
-const bool __NAME__::_priorMask[] = { 
-__PRIORMASK__
-};
-
-const double __NAME__::_sources[] = { 
-__SOURCES__
-};
-
-const double __NAME__::_source_stats[] = { 
-__SOURCESTATS__
-};
