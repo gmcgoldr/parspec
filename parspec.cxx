@@ -23,39 +23,49 @@
  */
 class __NAME__ : public ROOT::Math::IGradientFunctionMultiDim {
 private:
+  // dynamic memory for all the loaded model data
   void* _memory;
+  // size of the dynamic memory
+  const size_t _nbytes;
+  // pointers to relevant parts of the memory
   const double* _prior0;
   const double* _priorDown;
   const double* _priorUp;
   const int* _priorMask;
   const double* _sources;
   const double* _source_stats;
+  // dimensions of the model
   static const unsigned _nrows = __NROWS__;
   static const unsigned _ncols = __NCOLS__;
   static const unsigned _ndims = __NDIMS__;
+  // the parameter index at which stat. pars. are found
   static const unsigned _istats = __ISTATS__;
+  // return negative log likelihood
   bool _negative;
+  // the spectral data as computed from the model
   double _data[_ncols];
 
 public:
-  __NAME__() : _negative(true) {
-    // open a file at a static location with binary data
-    FILE* fin = std::fopen("__DATAPATH__", "rb");
-    if (!fin) throw std::runtime_error("Binary data not found at __DATAPATH__");
-    // allocate the memory for all the dynamic data  
-    const size_t nbytes = 
+  __NAME__() : 
+      _nbytes(
         _ndims*sizeof(double) +  // prior0 (one per parameter)
         _ndims*sizeof(double) +  // priorDown
         _ndims*sizeof(double) +  // priorUp
         _ndims*sizeof(int) +    // priorMask
         _nrows*_ncols*sizeof(double) +  // sources
-        _nrows*_ncols*sizeof(double);   // source_stats
-    _memory = std::malloc(nbytes);
+        _nrows*_ncols*sizeof(double) // source_stats
+      ),
+      _negative(true) {
+    // open a file at a static location with binary data
+    FILE* fin = std::fopen("__DATAPATH__", "rb");
+    if (!fin) throw std::runtime_error("Binary data not found at __DATAPATH__");
+    // allocate the memory for all the dynamic data  
+    _memory = std::malloc(_nbytes);
     if (!_memory) throw std::runtime_error("Unable to allocate memory");
     // read all the dynamic data into a single block of memory
-    const size_t nread = std::fread(_memory, 1, nbytes, fin);
+    const size_t nread = std::fread(_memory, 1, _nbytes, fin);
     std::fclose(fin);
-    if (nread < nbytes) throw std::runtime_error("Unable to read binary data");
+    if (nread < _nbytes) throw std::runtime_error("Unable to read binary data");
     // set pointers to the various parts of that memory
     size_t i = 0;
     _prior0 = (double*)((char*)_memory+i); i += _ndims*sizeof(double)/sizeof(char);
@@ -64,7 +74,7 @@ public:
     _priorMask = (int*)((char*)_memory+i); i += _ndims*sizeof(int)/sizeof(char);
     _sources = (double*)((char*)_memory+i); i += _nrows*_ncols*sizeof(double)/sizeof(char);
     _source_stats = (double*)((char*)_memory+i); i += _nrows*_ncols*sizeof(double)/sizeof(char);
-    assert(i == nbytes/sizeof(char) && "Didn't account for all written data");
+    assert(i == _nbytes/sizeof(char) && "Didn't account for all written data");
     // initialize the on stack spectral data
     std::memset(_data, 0, _ncols*sizeof(double));
   }
@@ -73,16 +83,29 @@ public:
     if (_memory) std::free(_memory);
   }
 
-  void setData(double* data) {
+  /**
+    * @brief set the data values used to computed the likelihood
+    *
+    * @param data pointer to memory containing data bin values.
+    */
+  void setData(const double* data) {
     std::memcpy(_data, data, _ncols*sizeof(double));
   }
 
   void setNLL() { _negative = true; }
   void setLL() { _negative = false; }
 
-  /** Compute the spectrum for the given parameters */
+  /** 
+    * @brief compute the spectrum for the given parameters 
+    *
+    * @param _x pointer to input paramter values in memory
+    * @param _spec pointer to memory where to store bin values
+    * @param _stats pointer to memory where to store bin stat. variance
+    */
   void Compute(const double* _x, double* _spec, double* _stats=0) const {
+    // pointer to the chunk of parameters where stat. pars are found
     const double* _stat_pars = _x+_istats;
+    // prepare the output memory for summing contents into
     std::memset(_spec, 0, _ncols*sizeof(double));
     if (_stats) std::memset(_stats, 0, _ncols*sizeof(double));
     // Compute factors for each source
@@ -95,6 +118,7 @@ public:
               std::pow(_factors[_i],2) * _source_stats[_i*_ncols+_j];
       }
     }
+    // modify computed spectrum with bin-by-bin fluctuations
     for (unsigned _j = 0; _j < _ncols; _j++)
       _spec[_j] += _stat_pars[_j];
     // Don't allow contents to drop below 0
@@ -102,64 +126,83 @@ public:
       _spec[_j] = std::max(0., _spec[_j]);
   }
 
+  /** ROOT wants a clone method... so, well, there it is */
   ROOT::Math::IBaseFunctionMultiDim* Clone() const {
-    return new __NAME__(*this);
+    // copy constructor is a good place to start
+    __NAME__ cloned = new __NAME__(*this);
+    // need to take ownership of the dynamic memory
+    cloned->_memory = std::malloc(_nbytes);
+    if (!cloned->_memory) throw std::runtime_error("Unable to allocate memory");
+    std::memcpy(cloned->_memory, _memory, _nbytes);
+    return cloned;
   }
 
   unsigned int NDim() const { return _ndims; }
 
-  /** Compute the log likelihood and gradient together */
+  /**
+    * @brief compute the log likelihood and gradients in one pass
+    *
+    * @param _x pointer to input paramter values in memory
+    * @param _f reference to variable in which log likelihood is stored
+    * @param _df pointer to memory where gradients are stored for each par.
+    */
   void FdF(const double* _x, double& _f, double* _df) const {
     const double* _stat_pars = _x+_istats;
-    // number of entries in each column (the spectrum)
+    // value of each bin (the spectrum)
     double _spec[_ncols] = { 0 };
-    // statistical uncertainty on the summed entries in each column
+    // statistical variance of the value of each bin
     double _stats[_ncols] = { 0 };
-    // gradient of each spectral column content w.r.t. to each parameter
+    // gradient of each bin value w.r.t. to each parameter
     double _spec_grads[_ncols*_ndims] = { 0 };
-    // gradient of each stat column content w.r.t. to each parameter
+    // gradient of each bin variance w.r.t. to each parameter
     double _stat_grads[_ncols*_ndims] = { 0 };
     _f = 0;
     std::memset(_df, 0, _ndims*sizeof(double));
     // Compute factors for each source
     const double _factors[] = { __FACTORS__ };
-    // The number of parameters affecting each row
+    // The number of parameters affecting each row (one entry per row)
     const unsigned _rownpars[] = { __ROWNPARS__ };
-    // List of parameter indices for each row
+    // List of parameter indices for each row (continuous list)
     const unsigned _rowpars[] = { __ROWPARS__ };
     // Gradient of each source factor w.r.t. each paraemeter
     const double _pargrads[] = { __PARGRADS__ };
-    unsigned _ipars = 0;
-    // Compute spectrum with gradients
+    unsigned _ipars = 0;  // current position in _rowpars
+
+    // sum contributions to each bin's value and variance from all sources,
+    // and the gradient of those w.r.t. to each parameter
     for (unsigned _i = 0; _i < _nrows; _i++) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
         _spec[_j] += _factors[_i] * _sources[_i*_ncols+_j];
         _stats[_j] += std::pow(_factors[_i],2) * _source_stats[_i*_ncols+_j];
+        // iterate through the parameters affecting this contribution
         for (unsigned _k = 0; _k < _rownpars[_i]; _k++) {
-          _spec_grads[_rowpars[_ipars+_k]*_ncols+_j] += 
+          const unsigned _ipar = _rowpars[_ipars+_k];
+          // _j col w.r.t. to _ipar
+          _spec_grads[_ipar*_ncols+_j] += 
               _pargrads[_ipars+_k] * _sources[_i*_ncols+_j];
-          _stat_grads[_rowpars[_ipars+_k]*_ncols+_j] += 
+          _stat_grads[_ipar*_ncols+_j] += 
               _pargrads[_ipars+_k] * 2 * _factors[_i] * _source_stats[_i*_ncols+_j];
         }
       }
+      // keep track of position in the _rowpars array (each row moves through
+      // but by a differing amount---i.e. rownpars)
       _ipars += _rownpars[_i];
     }
     // Add per column corrections to the spectrum
     for (unsigned _j = 0; _j < _ncols; _j++) {
       _spec[_j] += _stat_pars[_j];
-      // Indicate how the stat parameters influence contents of each column
+      // take note of house stat par _j affects bin _j
       _spec_grads[(_istats+_j)*_ncols+_j] += 1;
     }
-    // Don't allow values below 1, 0 would result in nan when computing
-    // Poisson likelihoods
+    // enforce lower bound of 1 to bin values, otherwise problems with Poisson
     for (unsigned _j = 0; _j < _ncols; _j++)
       _spec[_j] = std::max(1., _spec[_j]);
-    // Compute contributions to ll due to shifts in the spectrum under the
-    // influence of each parameter (i.e. Poisson components)
+
+    // compute ll penalty due to difference between bin values and _data
     for (unsigned _j = 0; _j < _ncols; _j++) {
-      // ll contributions from each column
+      // ll contributions from each bin
       _f += -0.5 * std::pow(_spec[_j]-_data[_j],2) / _spec[_j];
-      // dll/ds: change of likelihood when spectrum column _j changes
+      // dll/ds: change of likelihood when spectrum bin _j changes
       const double dllds = 
           0.5*std::pow(_spec[_j]-_data[_j],2)/std::pow(_spec[_j],2) - 
           (_spec[_j]-_data[_j])/_spec[_j];
@@ -167,23 +210,24 @@ public:
       for (unsigned _i = 0; _i < _ndims; _i++)
         _df[_i] += _spec_grads[_i*_ncols+_j] * dllds;
     }
-    // Compute contributions to ll due to moving the effective staistics (i.e
-    // the column content prior), and also due to moving the stat. pars
+
+    // regularize the statistical shifts using the computed bin stat. variances
     for (unsigned _j = 0; _j < _ncols; _j++) {
       const double shift = _x[_istats+_j];  // statistical shift to column _j
-      // ll contributions from each column (penaltiy for stat. shift)
+      // ll contributions from each bin (penaltiy for stat. shift)
       _f += -0.5 * std::pow(shift,2) / _stats[_j];
-      // dll/ds: change in likelihood when eff. stats for column _j changes
+      // dll/ds: change in likelihood when stat. variance for bin _j changes
       const double dllds = 
           0.5*std::pow(shift,2)/std::pow(_stats[_j],2);
-      // parameters influence the eff. stats, so do chain rule
+      // parameters influence the computed stat. variance, so do chain rule
       for (unsigned _i = 0; _i < _ndims; _i++)
         _df[_i] += _stat_grads[_i*_ncols+_j] * dllds;
-      // dll/dS: change in likelihood when shat shift _j changes
+      // dll/dS: change in likelihood when stat. shift _j changes
       const double dlldS = -shift/_stats[_j];
       _df[_istats+_j] += dlldS;
     }
-    // Compute contributions to ll due to priors
+
+    // Compute contributions to ll due to prior constraints on parameters
     for (unsigned _i = 0; _i < _ndims; _i++) {
       if (!_priorMask[_i]) continue;
       // ll contribution from prior on parameter _i
@@ -197,22 +241,31 @@ public:
           -(_x[_i]-_prior0[_i]) / 
           std::pow(((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]), 2);
     }
+
     // User defined likelihood contributions and gradients
     __GLL__
+
+    // invert ll if requested
     if (_negative) {
       _f *= -1;
       for (unsigned i = 0; i < _ndims; i++) _df[i] *= -1;
     }
   }
 
-  /** Wrap FdF for the gradient only to avoid 1-by-1 computation */
+  /**
+    * @brief compute only the gradients
+    *
+    * @param _x pointer to input paramter values in memory
+    * @param _f reference to variable in which log likelihood is stored
+    * @param _df pointer to memory where gradients are stored for each par.
+    */
   void Gradient(const double* _x, double* _df) const {
     double _f = 0;
     FdF(_x, _f, _df);
   }
 
 private:
-  /** No per-dimension implementation, compute full and return one gradient */
+  // No per-dimension implementation, compute full and return one gradient
   double DoDerivative(const double* _x, unsigned int _icoord) const {
     double _f = 0;
     double _df[_ncols];
