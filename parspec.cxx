@@ -129,7 +129,7 @@ public:
   /** ROOT wants a clone method... so, well, there it is */
   ROOT::Math::IBaseFunctionMultiDim* Clone() const {
     // copy constructor is a good place to start
-    __NAME__ cloned = new __NAME__(*this);
+    __NAME__* cloned = new __NAME__(*this);
     // need to take ownership of the dynamic memory
     cloned->_memory = std::malloc(_nbytes);
     if (!cloned->_memory) throw std::runtime_error("Unable to allocate memory");
