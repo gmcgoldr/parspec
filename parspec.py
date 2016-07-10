@@ -14,7 +14,7 @@ def set_build_path(path):
     path = os.path.abspath(path)
     if not os.path.exists(path):
         os.makedirs(path)
-    ROOT.gSystem.SetBuildDir(path)
+    ROOT.gSystem.SetBuildDir(path, True)
     global _build_path
     _build_path = path
 
@@ -633,10 +633,13 @@ class SpecBuilder(object):
 
         # Ask ROOT to compile and link the code
         prev_level = ROOT.gErrorIgnoreLevel
+        prev_aclic = ROOT.gSystem.GetAclicMode()
         ROOT.gErrorIgnoreLevel = ROOT.kWarning
+        ROOT.gSystem.SetAclicMode(ROOT.TSystem.kOpt)
         if ROOT.gROOT.LoadMacro(code_path+'+') != 0:
             raise RuntimeError("Unable to compile macro")
         ROOT.gErrorIgnoreLevel = prev_level
+        ROOT.gSystem.SetAclicMode(prev_aclic)
         # Grab the spectrum constructor from the compiled code
         constructor = getattr(ROOT, self.name)
 
