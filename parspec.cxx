@@ -40,6 +40,8 @@ private:
   static const unsigned _ndims = __NDIMS__;
   // the parameter index at which stat. pars. are found
   static const unsigned _istats = __ISTATS__;
+  // if no stat values are given, _istats == -1, disable calculations
+  const bool _use_stats;
   // return negative log likelihood
   bool _negative;
   // the spectral data as computed from the model
@@ -55,6 +57,7 @@ public:
         _nrows*_ncols*sizeof(double) +  // sources
         _nrows*_ncols*sizeof(double) // source_stats
       ),
+      _use_stats(_istats != (unsigned)-1),
       _negative(true) {
     // open a file at a static location with binary data
     FILE* fin = std::fopen("__DATAPATH__", "rb");
@@ -104,7 +107,7 @@ public:
     */
   void Compute(const double* _x, double* _spec, double* _stats=0) const {
     // pointer to the chunk of parameters where stat. pars are found
-    const double* _stat_pars = _x+_istats;
+    const double* _stat_pars = _use_stats ? _x+_istats : 0;
     // prepare the output memory for summing contents into
     std::memset(_spec, 0, _ncols*sizeof(double));
     if (_stats) std::memset(_stats, 0, _ncols*sizeof(double));
@@ -119,8 +122,9 @@ public:
       }
     }
     // modify computed spectrum with bin-by-bin fluctuations
-    for (unsigned _j = 0; _j < _ncols; _j++)
-      _spec[_j] += _stat_pars[_j];
+    if (_use_stats)
+      for (unsigned _j = 0; _j < _ncols; _j++)
+        _spec[_j] += _stat_pars[_j];
     // Don't allow contents to drop below 0
     for (unsigned _j = 0; _j < _ncols; _j++)
       _spec[_j] = std::max(0., _spec[_j]);
@@ -147,7 +151,7 @@ public:
     * @param _df pointer to memory where gradients are stored for each par.
     */
   void FdF(const double* _x, double& _f, double* _df) const {
-    const double* _stat_pars = _x+_istats;
+    const double* _stat_pars = _use_stats ? _x+_istats : 0;
     // value of each bin (the spectrum)
     double _spec[_ncols] = { 0 };
     // statistical variance of the value of each bin
@@ -189,10 +193,12 @@ public:
       _ipars += _rownpars[_i];
     }
     // Add per column corrections to the spectrum
-    for (unsigned _j = 0; _j < _ncols; _j++) {
-      _spec[_j] += _stat_pars[_j];
-      // take note of house stat par _j affects bin _j
-      _spec_grads[(_istats+_j)*_ncols+_j] += 1;
+    if (_use_stats) {
+      for (unsigned _j = 0; _j < _ncols; _j++) {
+        _spec[_j] += _stat_pars[_j];
+        // take note of house stat par _j affects bin _j
+        _spec_grads[(_istats+_j)*_ncols+_j] += 1;
+      } 
     }
     // enforce lower bound of 1 to bin values, otherwise problems with Poisson
     for (unsigned _j = 0; _j < _ncols; _j++)
@@ -211,20 +217,23 @@ public:
         _df[_i] += _spec_grads[_i*_ncols+_j] * dllds;
     }
 
-    // regularize the statistical shifts using the computed bin stat. variances
-    for (unsigned _j = 0; _j < _ncols; _j++) {
-      const double shift = _x[_istats+_j];  // statistical shift to column _j
-      // ll contributions from each bin (penaltiy for stat. shift)
-      _f += -0.5 * std::pow(shift,2) / _stats[_j];
-      // dll/ds: change in likelihood when stat. variance for bin _j changes
-      const double dllds = 
-          0.5*std::pow(shift,2)/std::pow(_stats[_j],2);
-      // parameters influence the computed stat. variance, so do chain rule
-      for (unsigned _i = 0; _i < _ndims; _i++)
-        _df[_i] += _stat_grads[_i*_ncols+_j] * dllds;
-      // dll/dS: change in likelihood when stat. shift _j changes
-      const double dlldS = -shift/_stats[_j];
-      _df[_istats+_j] += dlldS;
+    if (_use_stats) {
+      // regularize the statistical shifts using the computed bin stat. variances
+      for (unsigned _j = 0; _j < _ncols; _j++) {
+        if (_stats[_j] <= 0) continue;  // protect against bins with no stat. variance
+        const double shift = _x[_istats+_j];  // statistical shift to column _j
+        // ll contributions from each bin (penaltiy for stat. shift)
+        _f += -0.5 * std::pow(shift,2) / _stats[_j];
+        // dll/ds: change in likelihood when stat. variance for bin _j changes
+        const double dllds = 
+            0.5*std::pow(shift,2)/std::pow(_stats[_j],2);
+        // parameters influence the computed stat. variance, so do chain rule
+        for (unsigned _i = 0; _i < _ndims; _i++)
+          _df[_i] += _stat_grads[_i*_ncols+_j] * dllds;
+        // dll/dS: change in likelihood when stat. shift _j changes
+        const double dlldS = -shift/_stats[_j];
+        _df[_istats+_j] += dlldS;
+      }
     }
 
     // Compute contributions to ll due to prior constraints on parameters
@@ -280,9 +289,12 @@ private:
     Compute(_x, _spec, _stats);
     for (unsigned _j = 0; _j < _ncols; _j++)
       _f += -0.5 * std::pow(_spec[_j]-_data[_j],2) / _spec[_j];
-    for (unsigned _j = 0; _j < _ncols; _j++) {
-      const double shift = _x[_istats+_j];
-      _f += -0.5 * std::pow(shift,2) / _stats[_j];
+    if (_use_stats) {
+      for (unsigned _j = 0; _j < _ncols; _j++) {
+        if (_stats[_j] <= 0) continue;  // protect against bins with no stat. variance
+        const double shift = _x[_istats+_j];
+        _f += -0.5 * std::pow(shift,2) / _stats[_j];
+      }
     }
     for (unsigned _i = 0; _i < _ndims; _i++) {
       if (!_priorMask[_i]) continue;

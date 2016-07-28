@@ -453,7 +453,7 @@ class SpecBuilder(object):
         # Keep the set of all parameter names
         self._pars |= set(source._pars)
 
-        if len(source._stats) > 0 and not self._stat_pars:
+        if np.any(source._stats) and not self._stat_pars:
             # Setup parameter names for each bin uncertainty. Make sure
             # they sort alphanumerically, so pad with enough zeros
             nzeros = str(int(math.log10(self._ncols))+1)
@@ -562,7 +562,8 @@ class SpecBuilder(object):
         code = code.replace('__NROWS__', str(len(self._sources)))
         code = code.replace('__NCOLS__', str(self._ncols))
         code = code.replace('__NDIMS__', str(len(pars)))
-        code = code.replace('__ISTATS__', str(ipars[self._stat_pars[0]]))
+        code = code.replace('__ISTATS__', 
+            str(ipars[self._stat_pars[0]]) if self._stat_pars else '-1')
         code = code.replace('__FACTORS__', '\n%s\n' % code_factors)
         code = code.replace('__PARGRADS__', '\n%s\n' % code_pargrads)
         code = code.replace('__ROWNPARS__', '\n%s\n' % code_rownpars)
