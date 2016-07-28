@@ -147,8 +147,8 @@ def build_template_meas(name='example'):
     src_sig.add_template('p', sig*[0.8, 0.9, 1, 1.1, 1.2])
     # Add highly asymmetric systematic uncertainty which looks a lot like the
     # signal. This is a challenging model to fit.
-    src_sig.add_syst('s1', sig*[0.94, 0.98, 1, 1.02, 1.06], 'up')
-    src_sig.add_syst('s1', sig*[0.97, 0.99, 1, 1.01, 1.03], 'down')
+    src_sig.add_syst('s1', sig*[0.94, 0.98, 1, 1.02, 1.06], polarity='up')
+    src_sig.add_syst('s1', sig*[0.97, 0.99, 1, 1.01, 1.03], polarity='down')
     # Add another systematic which doesn't look like the signal or the data
     # (should be constrained)
     src_sig.add_syst('s2', sig*[1.02, 1.01, 1, 1.01, 1.02])
@@ -157,7 +157,7 @@ def build_template_meas(name='example'):
     bg1 = np.array([1600, 1300, 1000, 1000, 1000], dtype=float)
     src_bg1 = meas.new_source('bg1', bg1)
     src_bg1.use_lumi()
-    src_bg1.use_stats(.1/(10*bg1)**0.5)
+    src_bg1.use_stats(.1*(10*bg1)**0.5)
     src_bg1.set_xsec(1, 0.8, 1.1)
     # It is also impacted by systematic 2
     src_bg1.add_syst('s2', bg1*[1.02, 1.01, 1, 1.01, 1.02])
