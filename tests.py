@@ -37,7 +37,7 @@ class TestParSpec(unittest.TestCase):
         # Constrain xsec with an asymmeric prior
         builder.set_prior('xsec_sig', 1, 0.9, 1.2)
         # Constrain lumi with 5% uncertainty
-        builder.set_prior('lumi', 1, 0.95, 1.05)
+        builder.set_prior('lumi', 1, 0.95, 1.05, 'lognormal')
 
         ### Add two systematic uncertinaties ###
 
@@ -151,8 +151,8 @@ class TestParSpec(unittest.TestCase):
             ipar = self.spec.ipar(par)
             if par in self.builder._priors:
                 # Constrained parameters are scaled by constraint
-                low = self.builder._priors[par][1]
-                high = self.builder._priors[par][2]
+                low = self.builder._priors[par]['low']
+                high = self.builder._priors[par]['high']
                 scale = (high-low)/2.
             else:
                 # Unconstrained parameters are not scaled
@@ -182,11 +182,11 @@ class TestParSpec(unittest.TestCase):
                 self.assertAlmostEqual(info['high'], 0)
             else:
                 self.assertAlmostEqual(
-                    info['central'], self.builder._priors[par][0])
+                    info['central'], self.builder._priors[par]['central'])
                 self.assertAlmostEqual(
-                    info['low'], self.builder._priors[par][1])
+                    info['low'], self.builder._priors[par]['low'])
                 self.assertAlmostEqual(
-                    info['high'], self.builder._priors[par][2])
+                    info['high'], self.builder._priors[par]['high'])
 
     def test_stat_pars(self):
         """Check that statistical uncertainties are appropriate"""
@@ -386,9 +386,15 @@ class TestParSpec(unittest.TestCase):
             if par.startswith('stat'):
                 istat = int(par[4:])
                 bound = stats[istat]
-            ll += -0.5 * \
-                (pars[ipar]-centre[ipar])**2 / \
-                (bound-centre[ipar])**2
+            prior = self.builder._priors.get(par, None)
+            if prior is None or prior['ptype'] == 'normal':
+                ll += -0.5 * \
+                    (pars[ipar]-centre[ipar])**2 / \
+                    (bound-centre[ipar])**2
+            elif prior is not None and prior['ptype'] == 'lognormal':
+                ll += -0.5 * \
+                    (np.log(pars[ipar])-np.log(centre[ipar]))**2 / \
+                    (np.log(bound)-np.log(centre[ipar]))**2
         # Add contribution from the custom regularization on p which is
         # (p-syst1)**2
         ll += (pars[self.spec.ipar('p')]-pars[self.spec.ipar('syst1')])**2

@@ -1,2 +1,2 @@
 #!/bin/bash
-rm -rf comp_*.cxx *.pcm *.d *.so *.pyc *.pdf *.png
+rm -rf comp_*.cxx data_*.bin *.pcm *.d *.so *.pyc *.pdf *.png

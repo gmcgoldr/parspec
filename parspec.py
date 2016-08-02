@@ -406,6 +406,11 @@ class SpecBuilder(object):
     and compile it with ROOT's ACLIC.
     """
 
+    priorTypes = dict([
+        ('none', 0),
+        ('normal', 1),
+        ('lognormal', 2)])
+
     def __init__(self, name):
         """
         Prepare builder for a new spectrum.
@@ -461,7 +466,7 @@ class SpecBuilder(object):
                 ('stat%0'+nzeros+'d') % i for i in range(self._ncols)]
             self._pars |= set(self._stat_pars)
 
-    def set_prior(self, name, central, low=None, high=None):
+    def set_prior(self, name, central, low=None, high=None, ptype='normal'):
         """
         Set the prior value for a parameter. If low and high are None, the
         parameter isn't constrained.
@@ -474,6 +479,8 @@ class SpecBuilder(object):
             penalize by e^-0.5 at this value (below central)
         :param high: float
             penalize by e^-0.5 at this value (above central)
+        :param ptype: str
+            type of prior constraint from `SpecBuilder.priorTypes`
         """
         if bool(low) != bool(high):
             raise ValueError("Only one prior constraint is provided")
@@ -481,7 +488,13 @@ class SpecBuilder(object):
             raise ValueError("Invalid lower bound")
         if high is not None and not high >= central:
             raise ValueError("Invalid lower bound")
-        self._priors[name] = (central, low, high)
+        if ptype not in SpecBuilder.priorTypes:
+            raise ValueError("Invalid prior type %s" % ptype)
+        self._priors[name] = dict([
+            ('central', central), 
+            ('low', low),
+            ('high', high), 
+            ('ptype', ptype)])
 
     def add_regularization(self, expr, pars, grads):
         """
@@ -558,6 +571,10 @@ class SpecBuilder(object):
                 code_gll.append('_df[%d] += %s;' % (ipars[par], grad))
 
         # Substitue generated code into the template
+        code = code.replace('__PRIORTYPES__', 
+            ', '.join([
+                '_P%s=%d' % (name.upper(), val) 
+                for name, val in SpecBuilder.priorTypes.items()]))
         code = code.replace('__NAME__', self.name)
         code = code.replace('__NROWS__', str(len(self._sources)))
         code = code.replace('__NCOLS__', str(self._ncols))
@@ -583,25 +600,39 @@ class SpecBuilder(object):
         code = code.replace('__DATAPATH__', binary_data_path)
 
         # Piror data to insert in the code
-        prior0_data = ['0'] * len(pars)  # central value
-        priorDown_data = ['0'] * len(pars)  # down scale
-        priorUp_data = ['0'] * len(pars)  # up scale
-        priorMask_data = ['0'] * len(pars)  # 1 if the parameter is regularized
+        prior0_data = [0] * len(pars)  # central value
+        priorDown_data = [0] * len(pars)  # down scale
+        priorUp_data = [0] * len(pars)  # up scale
+        priorType_data = [SpecBuilder.priorTypes['none']] * len(pars)
+
         # Find the prior information for each parameter
         for ipar, par in enumerate(pars):
-            prior_vals = self._priors.get(par, None)
-            if prior_vals is None:
+            prior = self._priors.get(par, None)
+            if prior is None:
                 continue
+
             # Update data for those that are regularized
-            prior0_data[ipar] = prior_vals[0]
-            priorDown_data[ipar] = prior_vals[0]-prior_vals[1]
-            priorUp_data[ipar] = prior_vals[0]-prior_vals[2]
-            priorMask_data[ipar] = '1'
+            central = prior['central']
+            high = prior['high']
+            low = prior['low']
+            ptype = prior['ptype']
+
+            if ptype == 'lognormal':
+                central = np.log(central)
+                high = np.log(high)
+                low = np.log(low)
+
+            prior0_data[ipar] = central
+            priorDown_data[ipar] = central-low
+            priorUp_data[ipar] = central-high
+            priorType_data[ipar] = SpecBuilder.priorTypes[ptype]
+
         # Write into the file
         binary_data.write(np.array(prior0_data, dtype='float64'))
-        binary_data.write(np.array(priorDown_data, dtype='float64'))
-        binary_data.write(np.array(priorUp_data, dtype='float64'))
-        binary_data.write(np.array(priorMask_data, dtype='int32'))
+        # convert to variance to avoid squaring all the time in compiled code
+        binary_data.write(np.array(priorDown_data, dtype='float64')**2)
+        binary_data.write(np.array(priorUp_data, dtype='float64')**2)
+        binary_data.write(np.array(priorType_data, dtype='int32'))
 
         # Source data (spectrum contributions) to insert int he code
         sources_data = [[v for v in s._data] for s in self._sources]
@@ -652,11 +683,12 @@ class SpecBuilder(object):
         # Tell the spectrum about the central value of constrained parameters
         for par in self._priors:
             ipar = ipars[par]
-            central[ipar] = self._priors[par][0]
+            prior = self._priors[par]
+            central[ipar] = prior['central']
             # Use scales if prior is constrained
-            if self._priors[par][1] is not None:
-                lows[ipar] = self._priors[par][1]
-                highs[ipar] = self._priors[par][2]
+            if prior['low'] is not None:
+                lows[ipar] = prior['low']
+                highs[ipar] = prior['high']
             # Unconstrained prior
             else:
                 lows[ipar] = central[ipar]

@@ -226,7 +226,10 @@ class TemplateMeasurement(object):
 
             # Add regularization for x-section if provided
             if temp_src._xsec:
-                builder.set_prior(xsec_name, *temp_src._xsec)
+                builder.set_prior(
+                    xsec_name, 
+                    *temp_src._xsec, 
+                    ptype='lognormal')
 
             # Add regularization for systematics (overwrite pervious if the
             # same name is in another source, but doesn't matter)
@@ -237,7 +240,10 @@ class TemplateMeasurement(object):
         if uses_lumi:
             if not self._lumi:
                 raise RuntimeError("No luminosity uncertainty set")
-            builder.set_prior('lumi', *self._lumi)
+            builder.set_prior(
+                'lumi', 
+                *self._lumi,
+                ptype='lognormal')
 
         return builder
 

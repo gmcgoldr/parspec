@@ -23,6 +23,8 @@
  */
 class __NAME__ : public ROOT::Math::IGradientFunctionMultiDim {
 private:
+  enum PriorTypes { __PRIORTYPES__ };
+
   // dynamic memory for all the loaded model data
   void* _memory;
   // size of the dynamic memory
@@ -31,7 +33,7 @@ private:
   const double* _prior0;
   const double* _priorDown;
   const double* _priorUp;
-  const int* _priorMask;
+  const int* _priorType;
   const double* _sources;
   const double* _source_stats;
   // dimensions of the model
@@ -74,7 +76,7 @@ public:
     _prior0 = (double*)((char*)_memory+i); i += _ndims*sizeof(double)/sizeof(char);
     _priorDown = (double*)((char*)_memory+i); i += _ndims*sizeof(double)/sizeof(char);
     _priorUp = (double*)((char*)_memory+i); i += _ndims*sizeof(double)/sizeof(char);
-    _priorMask = (int*)((char*)_memory+i); i += _ndims*sizeof(int)/sizeof(char);
+    _priorType = (int*)((char*)_memory+i); i += _ndims*sizeof(int)/sizeof(char);
     _sources = (double*)((char*)_memory+i); i += _nrows*_ncols*sizeof(double)/sizeof(char);
     _source_stats = (double*)((char*)_memory+i); i += _nrows*_ncols*sizeof(double)/sizeof(char);
     assert(i == _nbytes/sizeof(char) && "Didn't account for all written data");
@@ -238,17 +240,32 @@ public:
 
     // Compute contributions to ll due to prior constraints on parameters
     for (unsigned _i = 0; _i < _ndims; _i++) {
-      if (!_priorMask[_i]) continue;
-      // ll contribution from prior on parameter _i
-      _f += 
-          // How far this parameter is from its nominal value
-          -0.5 * std::pow(_x[_i]-_prior0[_i],2) / 
-          // The width of the prior, conditional whether its below or above 0
-          std::pow(((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]), 2);
-      // dll/dp contribution from the prior penalty
-      _df[_i] += 
-          -(_x[_i]-_prior0[_i]) / 
-          std::pow(((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]), 2);
+      switch (_priorType[_i]) {
+      case _PNONE:
+        // unregularized, doesn't contribute to ll
+        break;
+      case _PNORMAL:
+        // ll contribution from prior on parameter _i
+        _f += 
+            // How far this parameter is from its nominal value
+            -0.5 * std::pow(_x[_i]-_prior0[_i],2) / 
+            // The width of the prior, conditional whether its below or above 0
+            ((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]);
+        // dll/dp contribution from the prior penalty
+        _df[_i] += 
+            -(_x[_i]-_prior0[_i]) / 
+            ((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]);
+        break;
+      case _PLOGNORMAL:
+        const double _lx = std::log(_x[_i]);
+        _f += 
+            -0.5 * std::pow(_lx-_prior0[_i],2) / 
+            ((_lx<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]);
+        _df[_i] += 
+            -(_lx-_prior0[_i]) / 
+            (_x[_i] * ((_lx<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]));
+        break;
+      }
     }
 
     // User defined likelihood contributions and gradients
@@ -257,7 +274,7 @@ public:
     // invert ll if requested
     if (_negative) {
       _f *= -1;
-      for (unsigned i = 0; i < _ndims; i++) _df[i] *= -1;
+      for (unsigned _i = 0; _i < _ndims; _i++) _df[_i] *= -1;
     }
   }
 
@@ -297,10 +314,22 @@ private:
       }
     }
     for (unsigned _i = 0; _i < _ndims; _i++) {
-      if (!_priorMask[_i]) continue;
-      _f += 
-          -0.5 * std::pow(_x[_i]-_prior0[_i],2) / 
-          std::pow(((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]), 2);
+      switch (_priorType[_i]) {
+      case _PNONE:
+        // unregularized, doesn't contribute to ll
+        break;
+      case _PNORMAL:
+        _f += 
+            -0.5 * std::pow(_x[_i]-_prior0[_i],2) / 
+            ((_x[_i]<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]);
+        break;
+      case _PLOGNORMAL:
+        const double _lx = std::log(_x[_i]);
+        _f += 
+            -0.5 * std::pow(_lx-_prior0[_i],2) / 
+            ((_lx<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]);
+        break;
+      }
     }
     __LL__
     if (_negative) _f *= -1;

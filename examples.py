@@ -238,9 +238,7 @@ def run_mcmc(meas, x, nsamples, covm=None, scales=None):
     mcmc.set_values(x)
 
     if covm is not None and scales is None:
-        scales, transform = np.linalg.eigh(covm)
-        mcmc.set_transform(transform)
-        mcmc.set_scales(scales**0.5)
+        mcmc.set_covm(covm)
     elif scales is not None:
         mcmc.set_scales(scales)
     else:
@@ -318,10 +316,14 @@ def asses_space(meas):
             vals.T[0], 
             vals.T[1], 
             weights=np.exp(vals.T[2]), 
-            bins=len(vals)**0.5)
+            bins=len(vals)**0.5,
+            normed=True)
     
         plt.xlabel(par1)
         plt.ylabel(par2)
+
+        cbar = plt.colorbar()
+        cbar.set_label('Likelihood density')
 
         plt.savefig('min_%d.pdf' % imin, format='pdf')
         plt.clf()
