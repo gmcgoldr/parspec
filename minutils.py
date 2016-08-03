@@ -9,8 +9,8 @@ from matplotlib import pyplot as plt
 def single_fit(
         spec, 
         fix=list(), 
-        values=list(), 
-        bounds=dict(),
+        values=dict(), 
+        scales=dict(),
         randomize=False, 
         nmax=100,
         tol=1e-2):
@@ -23,8 +23,8 @@ def single_fit(
         name of parameters to fix in the fit
     :param values: [float]
         custom central values
-    :param bounds: {str: (float, float)}
-        map parameter names to alternate down, up bounds
+    :param scales: {str: (float, float)}
+        map parameter names to alternate down, up scales
     :param randomize: bool
         randomize initial starting parameter values
     :param nmax: int
@@ -40,16 +40,16 @@ def single_fit(
     lows = np.array(spec.lows)
     highs = np.array(spec.highs)
 
-    central = spec.central
+    central = np.array(spec.central)
     constraints = spec.constraints
 
     # Revised scales for all parameters
-    for par, bound in bounds:
+    for par, bounds in scales.items():
         ipar = spec.ipar(par)
-        lows[ipar] = central[ipar] - abs(bound[0])
-        highs[ipar] = central[ipar] + abs(bound[1])
-        scale = abs(bound[1]-bound[0])
-        minimizer.SetVariableStepSize(ipar, 1e-2*scale)
+        lows[ipar] = central[ipar] - abs(bounds[0])
+        highs[ipar] = central[ipar] + abs(bounds[1])
+        scale = .5*(abs(bounds[1])+abs(bounds[0]))
+        minimizer.SetVariableStepSize(ipar, scale)
 
     # Build mask for parmaeters to fix, and indicate in minimizer
     ifixs = np.zeros(spec.npars, dtype=bool)
@@ -59,15 +59,14 @@ def single_fit(
         ifixs[ipar] = True
 
     # Revised central values for all parameters
-    if values:
-        for i in range(spec.npars):
-            minimizer.SetVariableValue(i, values[i])
-    else:
-        values = spec.central
+    for par, value in values.items():
+        ipar = spec.ipar(par)
+        minimizer.SetVariableValue(ipar, value)
+        central[ipar] = value
 
     if randomize:
         x = spec.randomize_parameters(
-            values, central, lows, highs, constraints)
+            central, central, lows, highs, constraints)
         for i in range(spec.npars):
             minimizer.SetVariableValue(i, x[i])
 
@@ -79,7 +78,7 @@ def single_fit(
             raise RuntimeError("Failed minimization")
         if randomize:
             x = spec.randomize_parameters(
-                values, central, lows, highs, constraints)
+                central, central, lows, highs, constraints)
             for i in range(spec.npars):
                 minimizer.SetVariableValue(i, x[i])
 

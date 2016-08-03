@@ -288,7 +288,7 @@ class ParSpec(object):
             scale = scales[ipar]
             if scale == 0:
                 scale = 1
-            minimizer.SetVariable(ipar, par, val, 1e-2*scale)
+            minimizer.SetVariable(ipar, par, val, scale)
 
         # When the LL is halved, 1 sigma is reached
         minimizer.SetErrorDef(0.5)
