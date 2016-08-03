@@ -258,6 +258,7 @@ public:
         break;
       case _PLOGNORMAL:
         const double _lx = std::log(_x[_i]);
+        // note: _prior0, Down, Up are already converted to log
         _f += 
             -0.5 * std::pow(_lx-_prior0[_i],2) / 
             ((_lx<_prior0[_i]) ? _priorDown[_i] : _priorUp[_i]);

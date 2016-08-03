@@ -6,24 +6,6 @@ import ROOT
 from matplotlib import pyplot as plt
 
 
-def random_shifts(central, lows, highs):
-    central = np.asarray(central)
-    lows = np.asarray(lows)
-    highs = np.asarray(highs)
-
-    assert(len(central) == len(lows) == len(highs))
-
-    shifts = np.random.randn(len(central))
-    ups = np.fabs(highs-central)
-    downs = np.fabs(central-lows)
-
-    mask_pos = shifts>=0
-    shifts[mask_pos] *= ups[mask_pos]
-    shifts[~mask_pos] *= downs[~mask_pos]
-
-    return shifts
-
-
 def single_fit(
         spec, 
         fix=list(), 
@@ -42,7 +24,7 @@ def single_fit(
     :param values: [float]
         custom central values
     :param bounds: {str: (float, float)}
-        map parameter names to alternate low, high bounds
+        map parameter names to alternate down, up bounds
     :param randomize: bool
         randomize initial starting parameter values
     :param nmax: int
@@ -54,18 +36,19 @@ def single_fit(
     minimizer = spec.build_minimizer()
     minimizer.SetTolerance(tol)
 
-    central = np.array(spec.central)
+    # copy so they can be edited
     lows = np.array(spec.lows)
     highs = np.array(spec.highs)
+
+    central = spec.central
+    constraints = spec.constraints
 
     # Revised scales for all parameters
     for par, bound in bounds:
         ipar = spec.ipar(par)
+        lows[ipar] = central[ipar] - abs(bound[0])
+        highs[ipar] = central[ipar] + abs(bound[1])
         scale = abs(bound[1]-bound[0])
-        lows[ipar] = bound[0]
-        highs[ipar] = bound[1]
-        if not (lows[ipar] <= central[ipar] <= highs[ipar]):
-            raise RuntimeError("Invalid bounds for %s" % par)
         minimizer.SetVariableStepSize(ipar, 1e-2*scale)
 
     # Build mask for parmaeters to fix, and indicate in minimizer
@@ -83,10 +66,10 @@ def single_fit(
         values = spec.central
 
     if randomize:
-        x = list(values)
-        shifts = random_shifts(central, lows, highs)
+        x = spec.randomize_parameters(
+            values, central, lows, highs, constraints)
         for i in range(spec.npars):
-            minimizer.SetVariableValue(i, x[i]+shifts[i])
+            minimizer.SetVariableValue(i, x[i])
 
     # Attempt the fit, TMinuit will fail sometimes
     nfails = 0  # keep track of failed fits
@@ -95,10 +78,10 @@ def single_fit(
         if nfails >= nmax:
             raise RuntimeError("Failed minimization")
         if randomize:
-            x = list(values)
-            shifts = random_shifts(central, lows, highs)
+            x = spec.randomize_parameters(
+                values, central, lows, highs, constraints)
             for i in range(spec.npars):
-                minimizer.SetVariableValue(i, x[i]+shifts[i])
+                minimizer.SetVariableValue(i, x[i])
 
     minx = [minimizer.X()[i] for i in range(spec.npars)]
     ll = spec.ll(minx)

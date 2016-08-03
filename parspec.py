@@ -295,6 +295,33 @@ class ParSpec(object):
 
         return minimizer
 
+    @staticmethod
+    def randomize_parameters(x, central, lows, highs, constraints):
+        x = np.array(x)
+        central = np.array(central)
+        lows = np.array(lows)
+        highs = np.array(highs)
+        logs = np.array([
+            True if c=='lognormal' else False
+            for c in constraints])
+
+        central[logs] = np.log(central[logs])
+        highs[logs] = np.log(highs[logs])
+        lows[logs] = np.log(lows[logs])
+
+        shifts = np.random.randn(len(central))
+        ups = np.fabs(highs-central)
+        downs = np.fabs(central-lows)
+
+        mask_pos = shifts>=0
+        shifts[mask_pos] *= ups[mask_pos]
+        shifts[~mask_pos] *= downs[~mask_pos]
+
+        x[~logs] += shifts[~logs]
+        x[logs] *= np.exp(shifts[logs])
+
+        return x
+
 
 class Source(object):
     """

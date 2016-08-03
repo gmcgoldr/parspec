@@ -197,10 +197,12 @@ def make_pseudo(meas, systs=True, signal=True, stats=True):
 
     if systs:
         # Vary the constrained parameters based on their priors
-        truth += minutils.random_shifts(
+        truth = meas.spec.randomize_parameters(
+            meas.spec.central, 
             meas.spec.central, 
             meas.spec.lows, 
-            meas.spec.highs)
+            meas.spec.highs,
+            meas.spec.constraints)
 
     if signal:
         # Also choose a random signal strength (unconstrained parameter)
