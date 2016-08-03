@@ -67,6 +67,7 @@ def single_fit(
     if randomize:
         x = spec.randomize_parameters(
             central, central, lows, highs, constraints)
+        x[ifixs] = central[ifixs]
         for i in range(spec.npars):
             minimizer.SetVariableValue(i, x[i])
 
@@ -79,6 +80,7 @@ def single_fit(
         if randomize:
             x = spec.randomize_parameters(
                 central, central, lows, highs, constraints)
+            x[ifixs] = central[ifixs]
             for i in range(spec.npars):
                 minimizer.SetVariableValue(i, x[i])
 
