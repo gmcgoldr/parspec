@@ -229,13 +229,13 @@ class TemplateMeasurement(object):
                 builder.set_prior(
                     xsec_name, 
                     *temp_src._xsec, 
-                    ptype='lognormal')
+                    constraint='lognormal')
 
             # Add regularization for systematics (overwrite pervious if the
             # same name is in another source, but doesn't matter)
             for syst in temp_src._systematics:
                 syst_name = 'syst_%s' % syst[0]
-                builder.set_prior(syst_name, 0, -1, 1)
+                builder.set_prior(syst_name, 0, -1, 1, constraint='normal')
 
         if uses_lumi:
             if not self._lumi:
@@ -243,7 +243,7 @@ class TemplateMeasurement(object):
             builder.set_prior(
                 'lumi', 
                 *self._lumi,
-                ptype='lognormal')
+                constraint='lognormal')
 
         return builder
 

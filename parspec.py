@@ -36,7 +36,16 @@ class ParSpec(object):
     no impact on the spectrum.
     """
 
-    def __init__(self, name, pars, ncols, central, lows, highs, obj):
+    def __init__(
+            self, 
+            name, 
+            pars, 
+            ncols, 
+            central, 
+            lows, 
+            highs, 
+            constraints,
+            obj):
         """
         Wrapper for a compile parameterized spectrum object. All interals are
         set at initialization, and are no longer modified.
@@ -53,6 +62,8 @@ class ParSpec(object):
             -1 sigma value of each parameter
         :param highs: [float]
             +1 sigma value of each parameter
+        :param constraints: [str]
+            type of constraint for each prior
         :param obj: ROOT.name
             ROOT wrapper for the compiled C++ spectrum object
         """
@@ -80,11 +91,20 @@ class ParSpec(object):
         lows[istats] = -stats**0.5
         highs[istats] = stats**0.5
 
-        self._bounds = np.array([lows, highs], dtype='float64').T
-        self._scales = tuple(0.5 * (self._bounds[:, 1] - self._bounds[:, 0]))
+        self._scales = tuple(0.5*(highs-lows))
+        self._lows = tuple(lows)
+        self._highs = tuple(highs)
+
+        self._constraints = list(constraints)
+        # stat parameters get normal constraints (not explicit in build)
+        for ipar in istats:
+            self._constraints[ipar] = 'normal'
+        # finalize the list
+        self._contraints = tuple(constraints)
+
         self._unconstrained = tuple(
             [p for i, p in enumerate(self._pars) 
-            if self._scales[i] == 0])
+            if self._constraints[i] == 'none'])
 
         # At this point, it's worth ensuring that all scales are posiitve
         assert(not np.any(np.array(self._scales) < 0))
@@ -129,6 +149,21 @@ class ParSpec(object):
         return self._central
 
     @property
+    def lows(self):
+        """Return list of -1 sigma parameter values"""
+        return self._lows
+
+    @property
+    def highs(self):
+        """Return list of +1 sigma parameter values"""
+        return self._highs
+
+    @property
+    def constraints(self):
+        """Return list of parameter constraints"""
+        return self._constraints
+
+    @property
     def scales(self):
         """Return list of parameter scales (symmetrized constraints)"""
         return self._scales
@@ -159,14 +194,16 @@ class ParSpec(object):
             central: prior central value
             low: prior -1 sigma value
             high: prior +1 sigma value
+            constraint: prior constraint type
         """
         ipar = self._make_ipar(par)
         return {
             'index': ipar,
             'name': self.pars[ipar],
             'central': self.central[ipar],
-            'low': self._bounds[ipar, 0],
-            'high': self._bounds[ipar, 1]}
+            'low': self._lows[ipar],
+            'high': self._highs[ipar],
+            'constraint': self._constraints[ipar]}
 
     def __call__(self, x):
         """
@@ -251,7 +288,7 @@ class ParSpec(object):
             scale = scales[ipar]
             if scale == 0:
                 scale = 1
-            minimizer.SetVariable(ipar, par, val, scale)
+            minimizer.SetVariable(ipar, par, val, 1e-2*scale)
 
         # When the LL is halved, 1 sigma is reached
         minimizer.SetErrorDef(0.5)
@@ -406,7 +443,7 @@ class SpecBuilder(object):
     and compile it with ROOT's ACLIC.
     """
 
-    priorTypes = dict([
+    constraints = dict([
         ('none', 0),
         ('normal', 1),
         ('lognormal', 2)])
@@ -466,7 +503,7 @@ class SpecBuilder(object):
                 ('stat%0'+nzeros+'d') % i for i in range(self._ncols)]
             self._pars |= set(self._stat_pars)
 
-    def set_prior(self, name, central, low=None, high=None, ptype='normal'):
+    def set_prior(self, name, central, low=None, high=None, constraint='none'):
         """
         Set the prior value for a parameter. If low and high are None, the
         parameter isn't constrained.
@@ -479,8 +516,8 @@ class SpecBuilder(object):
             penalize by e^-0.5 at this value (below central)
         :param high: float
             penalize by e^-0.5 at this value (above central)
-        :param ptype: str
-            type of prior constraint from `SpecBuilder.priorTypes`
+        :param constraint: str
+            type of prior constraint from `SpecBuilder.constraints`
         """
         if bool(low) != bool(high):
             raise ValueError("Only one prior constraint is provided")
@@ -488,13 +525,15 @@ class SpecBuilder(object):
             raise ValueError("Invalid lower bound")
         if high is not None and not high >= central:
             raise ValueError("Invalid lower bound")
-        if ptype not in SpecBuilder.priorTypes:
-            raise ValueError("Invalid prior type %s" % ptype)
+        if constraint not in SpecBuilder.constraints:
+            raise ValueError("Invalid prior type %s" % constraint)
+        if constraint != 'none' and low is None:
+            raise ValueError("Prior type given without bounds")
         self._priors[name] = dict([
             ('central', central), 
             ('low', low),
             ('high', high), 
-            ('ptype', ptype)])
+            ('constraint', constraint)])
 
     def add_regularization(self, expr, pars, grads):
         """
@@ -574,7 +613,7 @@ class SpecBuilder(object):
         code = code.replace('__PRIORTYPES__', 
             ', '.join([
                 '_P%s=%d' % (name.upper(), val) 
-                for name, val in SpecBuilder.priorTypes.items()]))
+                for name, val in SpecBuilder.constraints.items()]))
         code = code.replace('__NAME__', self.name)
         code = code.replace('__NROWS__', str(len(self._sources)))
         code = code.replace('__NCOLS__', str(self._ncols))
@@ -603,7 +642,7 @@ class SpecBuilder(object):
         prior0_data = [0] * len(pars)  # central value
         priorDown_data = [0] * len(pars)  # down scale
         priorUp_data = [0] * len(pars)  # up scale
-        priorType_data = [SpecBuilder.priorTypes['none']] * len(pars)
+        priorType_data = [SpecBuilder.constraints['none']] * len(pars)
 
         # Find the prior information for each parameter
         for ipar, par in enumerate(pars):
@@ -615,9 +654,9 @@ class SpecBuilder(object):
             central = prior['central']
             high = prior['high']
             low = prior['low']
-            ptype = prior['ptype']
+            constraint = prior['constraint']
 
-            if ptype == 'lognormal':
+            if constraint == 'lognormal':
                 central = np.log(central)
                 high = np.log(high)
                 low = np.log(low)
@@ -625,7 +664,7 @@ class SpecBuilder(object):
             prior0_data[ipar] = central
             priorDown_data[ipar] = central-low
             priorUp_data[ipar] = central-high
-            priorType_data[ipar] = SpecBuilder.priorTypes[ptype]
+            priorType_data[ipar] = SpecBuilder.constraints[constraint]
 
         # Write into the file
         binary_data.write(np.array(prior0_data, dtype='float64'))
@@ -679,17 +718,17 @@ class SpecBuilder(object):
         central = [0] * len(pars)
         lows = [0] * len(pars)
         highs = [0] * len(pars)
+        constraints = ['none'] * len(pars)
 
         # Tell the spectrum about the central value of constrained parameters
         for par in self._priors:
             ipar = ipars[par]
             prior = self._priors[par]
             central[ipar] = prior['central']
-            # Use scales if prior is constrained
-            if prior['low'] is not None:
+            constraints[ipar] = prior['constraint']
+            if constraints[ipar] != 'none':
                 lows[ipar] = prior['low']
                 highs[ipar] = prior['high']
-            # Unconstrained prior
             else:
                 lows[ipar] = central[ipar]
                 highs[ipar] = central[ipar]
@@ -703,4 +742,5 @@ class SpecBuilder(object):
             central,
             lows,
             highs,
+            constraints,
             constructor())

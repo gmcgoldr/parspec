@@ -35,7 +35,7 @@ class TestParSpec(unittest.TestCase):
         # Add to builder once configured
         builder.add_source(src_sig)
         # Constrain xsec with an asymmeric prior
-        builder.set_prior('xsec_sig', 1, 0.9, 1.2)
+        builder.set_prior('xsec_sig', 1, 0.9, 1.2, 'normal')
         # Constrain lumi with 5% uncertainty
         builder.set_prior('lumi', 1, 0.95, 1.05, 'lognormal')
 
@@ -58,7 +58,7 @@ class TestParSpec(unittest.TestCase):
         builder.add_source(src_sig_syst1_up)
         builder.add_source(src_sig_syst1_down)
         # 1 sigma penality when this parameter gets to values +/- 1
-        builder.set_prior('syst1', 0, -1, 1)
+        builder.set_prior('syst1', 0, -1, 1, 'normal')
 
         # Add a linear systematic variant
         sig_syst2 = [-100, -50, 0 , 50, 100]
@@ -66,7 +66,7 @@ class TestParSpec(unittest.TestCase):
         # This one is symmetrized: the value of syst2 simply scales
         src_sig_syst2.set_expression('syst2')
         builder.add_source(src_sig_syst2)
-        builder.set_prior('syst2', 0, -1, 1)
+        builder.set_prior('syst2', 0, -1, 1, 'normal')
 
         ### Add a template (the parameter of interest) ###
 
@@ -87,7 +87,7 @@ class TestParSpec(unittest.TestCase):
             ['lumi', 'xsec_bg'],
             ['xsec_bg', 'lumi'])
         builder.add_source(src_bg)
-        builder.set_prior('xsec_bg', 1, 0.9, 1.1)
+        builder.set_prior('xsec_bg', 1, 0.9, 1.1, 'normal')
 
         ### Share one of the systematics with the background ###
 
@@ -169,24 +169,28 @@ class TestParSpec(unittest.TestCase):
         """Check if the spectrum returns the correct information"""
         # Check for all parameters
         for ipar, par in enumerate(self.spec.pars):
-            if par.startswith('stat'):
-                continue
             info = self.spec.parinfo(par)
             # Should work with indices as well
             self.assertEqual(info, self.spec.parinfo(ipar))
             self.assertEqual(info['index'], ipar)
             self.assertEqual(info['name'], par)
-            if par in self.spec.unconstrained:
+            if par.startswith('stat'):
+                self.assertAlmostEqual(info['central'], 0)
+                self.assertEqual(info['constraint'], 'normal')
+            elif par in self.spec.unconstrained:
                 self.assertAlmostEqual(info['central'], 0)
                 self.assertAlmostEqual(info['low'], 0)
                 self.assertAlmostEqual(info['high'], 0)
+                self.assertEqual(info['constraint'], 'none')
             else:
-                self.assertAlmostEqual(
-                    info['central'], self.builder._priors[par]['central'])
-                self.assertAlmostEqual(
-                    info['low'], self.builder._priors[par]['low'])
-                self.assertAlmostEqual(
-                    info['high'], self.builder._priors[par]['high'])
+                prior = self.builder._priors[par]
+                self.assertAlmostEqual(info['central'], prior['central'])
+                self.assertAlmostEqual(info['low'], prior['low'])
+                self.assertAlmostEqual(info['high'], prior['high'])
+                if par == 'lumi':
+                    self.assertEqual(info['constraint'], 'lognormal')
+                else:
+                    self.assertEqual(info['constraint'], 'normal')
 
     def test_stat_pars(self):
         """Check that statistical uncertainties are appropriate"""
@@ -387,11 +391,11 @@ class TestParSpec(unittest.TestCase):
                 istat = int(par[4:])
                 bound = stats[istat]
             prior = self.builder._priors.get(par, None)
-            if prior is None or prior['ptype'] == 'normal':
+            if prior is None or prior['constraint'] == 'normal':
                 ll += -0.5 * \
                     (pars[ipar]-centre[ipar])**2 / \
                     (bound-centre[ipar])**2
-            elif prior is not None and prior['ptype'] == 'lognormal':
+            elif prior is not None and prior['constraint'] == 'lognormal':
                 ll += -0.5 * \
                     (np.log(pars[ipar])-np.log(centre[ipar]))**2 / \
                     (np.log(bound)-np.log(centre[ipar]))**2

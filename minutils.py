@@ -6,11 +6,29 @@ import ROOT
 from matplotlib import pyplot as plt
 
 
+def random_shifts(central, lows, highs):
+    central = np.asarray(central)
+    lows = np.asarray(lows)
+    highs = np.asarray(highs)
+
+    assert(len(central) == len(lows) == len(highs))
+
+    shifts = np.random.randn(len(central))
+    ups = np.fabs(highs-central)
+    downs = np.fabs(central-lows)
+
+    mask_pos = shifts>=0
+    shifts[mask_pos] *= ups[mask_pos]
+    shifts[~mask_pos] *= downs[~mask_pos]
+
+    return shifts
+
+
 def single_fit(
         spec, 
         fix=list(), 
-        scales=list(), 
         values=list(), 
+        bounds=dict(),
         randomize=False, 
         nmax=100,
         tol=1e-2):
@@ -21,10 +39,10 @@ def single_fit(
         sepectrum object to use in the fit
     :param fix: [str]
         name of parameters to fix in the fit
-    :param scales [float]
-        custom scales
-    :param values [float]
+    :param values: [float]
         custom central values
+    :param bounds: {str: (float, float)}
+        map parameter names to alternate low, high bounds
     :param randomize: bool
         randomize initial starting parameter values
     :param nmax: int
@@ -36,20 +54,26 @@ def single_fit(
     minimizer = spec.build_minimizer()
     minimizer.SetTolerance(tol)
 
-    # Revised scales for all parameters
-    if scales:
-        for i in range(spec.npars):
-            minimizer.SetVariableStepSize(i, scales[i])
-        scales = list(scales)
-    else:
-        scales = list(spec.scales)
+    central = np.array(spec.central)
+    lows = np.array(spec.lows)
+    highs = np.array(spec.highs)
 
-    # Fix parameters not floating in fit, and set their scales to 0 so they
-    # don't get randomized
+    # Revised scales for all parameters
+    for par, bound in bounds:
+        ipar = spec.ipar(par)
+        scale = abs(bound[1]-bound[0])
+        lows[ipar] = bound[0]
+        highs[ipar] = bound[1]
+        if not (lows[ipar] <= central[ipar] <= highs[ipar]):
+            raise RuntimeError("Invalid bounds for %s" % par)
+        minimizer.SetVariableStepSize(ipar, 1e-2*scale)
+
+    # Build mask for parmaeters to fix, and indicate in minimizer
+    ifixs = np.zeros(spec.npars, dtype=bool)
     for par in fix:
         ipar = spec.ipar(par)
         minimizer.FixVariable(ipar)
-        scales[ipar] = 0
+        ifixs[ipar] = True
 
     # Revised central values for all parameters
     if values:
@@ -60,7 +84,7 @@ def single_fit(
 
     if randomize:
         x = list(values)
-        shifts = np.random.randn(spec.npars) * scales
+        shifts = random_shifts(central, lows, highs)
         for i in range(spec.npars):
             minimizer.SetVariableValue(i, x[i]+shifts[i])
 
@@ -72,7 +96,7 @@ def single_fit(
             raise RuntimeError("Failed minimization")
         if randomize:
             x = list(values)
-            shifts = np.random.randn(spec.npars) * scales
+            shifts = random_shifts(central, lows, highs)
             for i in range(spec.npars):
                 minimizer.SetVariableValue(i, x[i]+shifts[i])
 

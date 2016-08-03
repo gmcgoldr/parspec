@@ -193,15 +193,14 @@ def make_pseudo(meas, systs=True, signal=True, stats=True):
     # Get the scales for the paramters controlling the spectrum
     scales = meas.spec.scales
     # Randomize the true underlying values for constrained parameters
-    truth = list(meas.spec.central)
+    truth = np.array(meas.spec.central)
 
     if systs:
         # Vary the constrained parameters based on their priors
-        for par in meas.spec.pars:
-            if par in meas.spec.unconstrained:
-                continue
-            ipar = meas.spec.ipar(par)
-            truth[ipar] += np.random.normal(0, scales[ipar])
+        truth += minutils.random_shifts(
+            meas.spec.central, 
+            meas.spec.lows, 
+            meas.spec.highs)
 
     if signal:
         # Also choose a random signal strength (unconstrained parameter)
