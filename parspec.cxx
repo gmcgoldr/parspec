@@ -10,6 +10,8 @@
 
 #include <Math/IFunction.h>
 
+#define R2P 2.5066282746310002  // sqrt(2*pi)
+
 /**
  * Parameterized spectrum: given a set of parmaeters, evaluate the expected
  * spectrum. Given an observed background and priors on parameters, the log
@@ -25,23 +27,24 @@ class __NAME__ : public ROOT::Math::IGradientFunctionMultiDim {
 private:
   enum PriorTypes { __PRIORTYPES__ };
 
-  // dynamic memory for all the loaded model data
-  void* _memory;
-  // size of the dynamic memory
-  const size_t _nbytes;
-  // pointers to relevant parts of the memory
-  const double* _prior0;
-  const double* _priorDown;
-  const double* _priorUp;
-  const int* _priorType;
-  const double* _sources;
-  const double* _source_stats;
   // dimensions of the model
   static const unsigned _nrows = __NROWS__;
   static const unsigned _ncols = __NCOLS__;
   static const unsigned _ndims = __NDIMS__;
   // the parameter index at which stat. pars. are found
   static const unsigned _istats = __ISTATS__;
+
+  // dynamic memory for all the loaded model data
+  void* _memory;
+  // size of the dynamic memory
+  const size_t _nbytes;
+  // pointers to relevant parts of the memory
+  const double* _prior0;  // prior central values
+  const double* _priorDown;  // prior down scale
+  const double* _priorUp;  // prior up scale
+  const int* _priorType;  // prior type (e.g. normal)
+  const double* _sources;  // array of bin values for each source
+  const double* _source_stats;  // array of bin variance for each source
   // if no stat values are given, _istats == -1, disable calculations
   const bool _use_stats;
   // return negative log likelihood
@@ -49,18 +52,7 @@ private:
   // the spectral data as computed from the model
   double _data[_ncols];
 
-public:
-  __NAME__() : 
-      _nbytes(
-        _ndims*sizeof(double) +  // prior0 (one per parameter)
-        _ndims*sizeof(double) +  // priorDown
-        _ndims*sizeof(double) +  // priorUp
-        _ndims*sizeof(int) +    // priorMask
-        _nrows*_ncols*sizeof(double) +  // sources
-        _nrows*_ncols*sizeof(double) // source_stats
-      ),
-      _use_stats(_istats != (unsigned)-1),
-      _negative(true) {
+  void _setMemory() {
     // open a file at a static location with binary data
     FILE* fin = std::fopen("__DATAPATH__", "rb");
     if (!fin) throw std::runtime_error("Binary data not found at __DATAPATH__");
@@ -84,8 +76,42 @@ public:
     std::memset(_data, 0, _ncols*sizeof(double));
   }
 
-  ~__NAME__() {
+  // disable assignment operator
+  __NAME__& operator= (const __NAME__&);
+
+public:
+  __NAME__() : 
+      _nbytes(
+        _ndims*sizeof(double) +  // prior0 (one per parameter)
+        _ndims*sizeof(double) +  // priorDown
+        _ndims*sizeof(double) +  // priorUp
+        _ndims*sizeof(int) +    // priorMask
+        _nrows*_ncols*sizeof(double) +  // sources
+        _nrows*_ncols*sizeof(double) // source_stats
+      ),
+      _use_stats(_istats != (unsigned)-1),
+      _negative(true) {
+    // set memory from hard coded path to binary file
+    _setMemory();
+  }
+
+  /** Copy constructor */
+  __NAME__(const __NAME__& other) : 
+      // copy state
+      _nbytes(other._nbytes), 
+      _use_stats(other._use_stats), 
+      _negative(other._negative) {
+    // assign own memory
+    _setMemory();
+  }
+
+  virtual ~__NAME__() {
     if (_memory) std::free(_memory);
+  }
+
+  /** ROOT wants a clone method... so, well, there it is */
+  virtual ROOT::Math::IBaseFunctionMultiDim* Clone() const {
+    return new __NAME__(*this);
   }
 
   /**
@@ -93,12 +119,12 @@ public:
     *
     * @param data pointer to memory containing data bin values.
     */
-  void setData(const double* data) {
+  virtual void setData(const double* data) {
     std::memcpy(_data, data, _ncols*sizeof(double));
   }
 
-  void setNLL() { _negative = true; }
-  void setLL() { _negative = false; }
+  virtual void setNLL() { _negative = true; }
+  virtual void setLL() { _negative = false; }
 
   /** 
     * @brief compute the spectrum for the given parameters 
@@ -107,7 +133,7 @@ public:
     * @param _spec pointer to memory where to store bin values
     * @param _stats pointer to memory where to store bin stat. variance
     */
-  void Compute(const double* _x, double* _spec, double* _stats=0) const {
+  virtual void Compute(const double* _x, double* _spec, double* _stats=0) const {
     // pointer to the chunk of parameters where stat. pars are found
     const double* _stat_pars = _use_stats ? _x+_istats : 0;
     // prepare the output memory for summing contents into
@@ -127,23 +153,9 @@ public:
     if (_use_stats)
       for (unsigned _j = 0; _j < _ncols; _j++)
         _spec[_j] += _stat_pars[_j];
-    // Don't allow contents to drop below 0
-    for (unsigned _j = 0; _j < _ncols; _j++)
-      _spec[_j] = std::max(0., _spec[_j]);
   }
 
-  /** ROOT wants a clone method... so, well, there it is */
-  ROOT::Math::IBaseFunctionMultiDim* Clone() const {
-    // copy constructor is a good place to start
-    __NAME__* cloned = new __NAME__(*this);
-    // need to take ownership of the dynamic memory
-    cloned->_memory = std::malloc(_nbytes);
-    if (!cloned->_memory) throw std::runtime_error("Unable to allocate memory");
-    std::memcpy(cloned->_memory, _memory, _nbytes);
-    return cloned;
-  }
-
-  unsigned int NDim() const { return _ndims; }
+  virtual unsigned int NDim() const { return _ndims; }
 
   /**
     * @brief compute the log likelihood and gradients in one pass
@@ -152,7 +164,7 @@ public:
     * @param _f reference to variable in which log likelihood is stored
     * @param _df pointer to memory where gradients are stored for each par.
     */
-  void FdF(const double* _x, double& _f, double* _df) const {
+  virtual void FdF(const double* _x, double& _f, double* _df) const {
     const double* _stat_pars = _use_stats ? _x+_istats : 0;
     // value of each bin (the spectrum)
     double _spec[_ncols] = { 0 };
@@ -202,39 +214,44 @@ public:
         _spec_grads[(_istats+_j)*_ncols+_j] += 1;
       } 
     }
-    // enforce lower bound of 1 to bin values, otherwise problems with Poisson
-    for (unsigned _j = 0; _j < _ncols; _j++)
-      _spec[_j] = std::max(1., _spec[_j]);
 
     // compute ll penalty due to difference between bin values and _data
     for (unsigned _j = 0; _j < _ncols; _j++) {
-      // ll contributions from each bin
-      _f += -0.5 * std::pow(_spec[_j]-_data[_j],2) / _spec[_j];
-      // dll/ds: change of likelihood when spectrum bin _j changes
-      const double dllds = 
-          0.5*std::pow(_spec[_j]-_data[_j],2)/std::pow(_spec[_j],2) - 
-          (_spec[_j]-_data[_j])/_spec[_j];
-      // dll/dp = dll/ds * ds/dp where p is parameter _i
+      const double _k = _data[_j];  // number observed
+      const double _v = _spec[_j];  // number expected (variance)
+      if (_v <= 0 && _k <= 0) continue;  // gracefully handle empty bins
+      // log poisson for k given v. The term in brackets in the k! which isn't
+      // needed since its constant w.r.t. to pars, but helps keep the ll to
+      // some resonnable value (otherwise scale as n*k*ln(v))
+      _f += (_v > 0) ?
+          _k*std::log(_v) - _v - std::lgamma(_k+1) :
+          // zero or smaller bin values are not allowed
+          -std::numeric_limits<double>::infinity();
+      // derivative of poisson w.r.t. to expected bin value
+      const double dlldv = (_v > 0) ?
+          _k/_v - 1 :
+          std::numeric_limits<double>::infinity();
+      // keep track of derivative of ll w.r.t. to each par. impacting bin val
       for (unsigned _i = 0; _i < _ndims; _i++)
-        _df[_i] += _spec_grads[_i*_ncols+_j] * dllds;
+        _df[_i] += _spec_grads[_i*_ncols+_j] * dlldv;
     }
 
     if (_use_stats) {
       // regularize the statistical shifts using the computed bin stat. variances
       for (unsigned _j = 0; _j < _ncols; _j++) {
-        if (_stats[_j] <= 0) continue;  // protect against bins with no stat. variance
-        const double shift = _x[_istats+_j];  // statistical shift to column _j
-        // ll contributions from each bin (penaltiy for stat. shift)
-        _f += -0.5 * std::pow(shift,2) / _stats[_j];
-        // dll/ds: change in likelihood when stat. variance for bin _j changes
-        const double dllds = 
-            0.5*std::pow(shift,2)/std::pow(_stats[_j],2);
-        // parameters influence the computed stat. variance, so do chain rule
+        const double _s = _x[_istats+_j];  // shift from nominal
+        const double _v = _stats[_j];  // variance for the bin
+        if (_v <= 1) continue;  // don't bother for small variance
+        // normal ll term, but include normalization which is impacted by the
+        // variance, which is impacted by parameters
+        _f += -0.5*std::pow(_s,2)/_v - std::log(R2P*std::sqrt(_v));
+        // change of ll w.r.t. variance (pars impact variance)
+        const double dlldv = 0.5*std::pow(_s,2)/std::pow(_v,2) - .5/_v;
         for (unsigned _i = 0; _i < _ndims; _i++)
-          _df[_i] += _stat_grads[_i*_ncols+_j] * dllds;
-        // dll/dS: change in likelihood when stat. shift _j changes
-        const double dlldS = -shift/_stats[_j];
-        _df[_istats+_j] += dlldS;
+          _df[_i] += _stat_grads[_i*_ncols+_j] * dlldv;
+        // change of ll w.r.t. to the actual bin shift
+        const double dllds = -_s/_v;
+        _df[_istats+_j] += dllds;
       }
     }
 
@@ -286,32 +303,39 @@ public:
     * @param _f reference to variable in which log likelihood is stored
     * @param _df pointer to memory where gradients are stored for each par.
     */
-  void Gradient(const double* _x, double* _df) const {
+  virtual void Gradient(const double* _x, double* _df) const {
     double _f = 0;
     FdF(_x, _f, _df);
   }
 
 private:
   // No per-dimension implementation, compute full and return one gradient
-  double DoDerivative(const double* _x, unsigned int _icoord) const {
+  virtual double DoDerivative(const double* _x, unsigned int _icoord) const {
     double _f = 0;
     double _df[_ncols];
     FdF(_x, _f, _df);
     return _df[_icoord];
   }
 
-  double DoEval(const double* _x) const {
+  virtual double DoEval(const double* _x) const {
     double _f = 0;
     double _spec[_ncols] = { 0 };
     double _stats[_ncols] = { 0 };
     Compute(_x, _spec, _stats);
-    for (unsigned _j = 0; _j < _ncols; _j++)
-      _f += -0.5 * std::pow(_spec[_j]-_data[_j],2) / _spec[_j];
+    for (unsigned _j = 0; _j < _ncols; _j++) {
+      const double _k = _data[_j];
+      const double _v = _spec[_j];
+      if (_v <= 0 && _k <= 0) continue;
+      _f += (_v > 0) ?
+          _k*std::log(_v) - _v - std::lgamma(_k+1) :
+          -std::numeric_limits<double>::infinity();
+    }
     if (_use_stats) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
-        if (_stats[_j] <= 0) continue;  // protect against bins with no stat. variance
-        const double shift = _x[_istats+_j];
-        _f += -0.5 * std::pow(shift,2) / _stats[_j];
+        const double _s = _x[_istats+_j];
+        const double _v = _stats[_j];
+        if (_v <= 1) continue;
+        _f += -0.5*std::pow(_s,2)/_v - std::log(R2P*std::sqrt(_v));
       }
     }
     for (unsigned _i = 0; _i < _ndims; _i++) {

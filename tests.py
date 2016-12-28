@@ -1,4 +1,5 @@
 import unittest
+import math
 
 import numpy as np
 import numpy.testing
@@ -8,6 +9,10 @@ ROOT.PyConfig.IgnoreCommandLineOptions = True
 from parspec import SpecBuilder
 from parspec import Source
 from parspec import ParSpec
+
+
+def logPoisson(k, v):
+    return k*np.log(v) - v - np.array(list(map(math.lgamma, k+1)))
 
 
 class TestParSpec(unittest.TestCase):
@@ -42,7 +47,7 @@ class TestParSpec(unittest.TestCase):
         ### Add two systematic uncertinaties ###
 
         # Add systematic shape variation (a top hat)
-        sig_syst1 = [0, 50, 50 , 50, 0]
+        sig_syst1 = [0, 50, 50, 50, 0]
         # This is a shape which inherits the normalization from the signal
         src_sig_syst1_up = Source(sig_syst1, shapeof=src_sig)
         # Assume 1:1 statistical uncertainty on this shape
@@ -344,23 +349,26 @@ class TestParSpec(unittest.TestCase):
 
     def test_ll_nom(self):
         """Check the nominal log likelihood is as expected"""
-        # Nominal spectrum with central parameters should have 0 ll
         pars = list(self.spec.central)
-        self.spec.set_data(self.spec(pars))  # nominal data
-        self.assertAlmostEqual(0, self.spec.ll(pars))
+        nominal, stats = self.spec.specstats(pars)
+        self.spec.set_data(nominal)  # nominal data
+        # event with nominal, ll penalty from poisson and stat normalization
+        ll = 0  # log likelihood
+        ll += np.sum(logPoisson(nominal, nominal))
+        ll -= np.sum(np.log((2*math.pi)**.5 * stats))
+        self.assertAlmostEqual(ll, self.spec.ll(pars))
 
     def test_ll_stats(self):
         """Check the log likelihood with varied yields is as expected"""
         # Modify a few bins in data and check for poisson likelihood drop
         pars = list(self.spec.central)
-        nominal = self.spec(pars)
+        nominal, stats = self.spec.specstats(pars)
         data = np.copy(nominal)
         data[1] *= 1.1
         data[2] *= 0.5
         ll = 0  # log likelihood
-        # Penalty is log(exp(-(d-n)**2/(2*(n**0.5)**2))
-        ll += -0.5 * (data[1]-nominal[1])**2/nominal[1]
-        ll += -0.5 * (data[2]-nominal[2])**2/nominal[2]
+        ll += np.sum(logPoisson(data, nominal))
+        ll -= np.sum(np.log((2*math.pi)**.5 * stats))
         # Set the fluctuated data, and check the log likelihood to nominal
         self.spec.set_data(data)
         self.assertAlmostEqual(ll/self.spec.ll(pars), 1)
@@ -376,6 +384,8 @@ class TestParSpec(unittest.TestCase):
         data, stats = self.spec.specstats(pars)
         self.spec.set_data(data)
         ll = 0
+        ll += np.sum(logPoisson(data, data))
+        ll -= np.sum(np.log((2*math.pi)**.5 * stats))
         for par in self.spec.pars:
             # Don't regularize free parameters
             if par in self.spec.unconstrained:
@@ -412,11 +422,11 @@ class TestParSpec(unittest.TestCase):
         self.spec.set_data(data)
         pars[self.spec.ipar('xsec_sig')] = 1.2
         pars[self.spec.ipar('p')] = 1.2
-        varied = self.spec(pars)  # nominal expectation (with shifts)
+        varied, stats = self.spec.specstats(pars)  # nominal expectation (with shifts)
         ll = 0
+        ll += np.sum(logPoisson(data, varied))
+        ll -= np.sum(np.log((2*math.pi)**.5 * stats))
         ll += -0.5 * (1.2-1)**2 / (self.spec.parinfo('xsec_sig')['high']-1)**2
-        # The varied spectrum is the expectation, so use it for poisson scales
-        ll += np.sum(-0.5 * (data-varied)**2 / varied)
         # Add custom regularizationonce more
         ll += (pars[self.spec.ipar('p')]-pars[self.spec.ipar('syst1')])**2
         self.assertAlmostEqual(ll/self.spec.ll(pars), 1)
@@ -429,7 +439,8 @@ class TestParSpec(unittest.TestCase):
         self.spec.set_data(data)
         self.move_pars(pars)  # move parameters to check proper partials
 
-        dp = 1e-3
+        ntol = 5
+        dp = 10**(-ntol)
 
         for par in self.spec.pars:
             # Copy the central parameter values
@@ -455,7 +466,7 @@ class TestParSpec(unittest.TestCase):
 
             # The computed and numeric gradients should be similar, but won't
             # be indentical since the numeric one is an approximation
-            self.assertAlmostEqual(dlldp/grads[ipar], 1, 3)
+            self.assertAlmostEqual(dlldp/grads[ipar], 1, ntol-1)
 
     def test_grad_func(self):
         """Test that the dedicated gradient function agrees with FdF"""
@@ -473,7 +484,6 @@ class TestParSpec(unittest.TestCase):
         self.spec._obj.Gradient(pars, grads2)
 
         np.testing.assert_almost_equal(grads1, grads2)
-
 
     def test_ngrads(self):
         """Test the positive likelihood gradients are as expected"""
@@ -494,6 +504,60 @@ class TestParSpec(unittest.TestCase):
         self.spec._obj.setNLL()
 
         np.testing.assert_almost_equal(grads, -ngrads)
+
+    def test_zero(self):
+        builder = SpecBuilder('SpectrumZero')
+
+        sig = [10., 11.]
+        src_sig = Source(sig)
+        src_sig.use_stats(.5*(2*np.array(sig))**0.5)
+        src_sig.set_expression(
+            'lumi*xsec_sig',
+            ['lumi', 'xsec_sig'],
+            ['xsec_sig', 'lumi'])
+        builder.add_source(src_sig)
+        builder.set_prior('xsec_sig', 1, 0.9, 1.2, 'normal')
+        builder.set_prior('lumi', 1, 0.95, 1.05, 'lognormal')
+
+        sig_syst1 = [-5, 0]
+        src_sig_syst1_up = Source(sig_syst1, shapeof=src_sig)
+        src_sig_syst1_up.set_expression('syst1', polarity='up')
+        builder.add_source(src_sig_syst1_up)
+        builder.set_prior('syst1', 0, -1, 1, 'normal')
+
+        spec = builder.build()
+
+        pars = list(spec.central)
+        data = spec(pars)
+        isyst = spec.ipar('syst1')
+
+        pars[isyst] = 2
+        # ensure syst made bin go to zero
+        self.assertAlmostEqual(spec(pars)[0], 0)
+        # ensure not NaN (0 data so bin is ignored)
+        self.assertTrue(spec.ll(pars) == spec.ll(pars))
+
+        # try again with negative bin value
+        pars[isyst] = 3
+        self.assertAlmostEqual(spec(pars)[0], -5)
+        self.assertTrue(spec.ll(pars) == spec.ll(pars))
+
+        # now set the data and check that ll goes to -inf
+        spec.set_data(data)
+        # check also grads, so need memory arrays
+        pars = np.array(pars, dtype=np.float64)
+        grads = pars*0
+
+        pars[isyst] = 2
+        self.assertEqual(spec.ll(pars), float('-inf'))
+        spec._obj.Gradient(pars, grads)
+        self.assertEqual(grads[isyst], float('inf'))
+
+        pars[isyst] = 3
+        self.assertEqual(spec.ll(pars), float('-inf'))
+        spec._obj.Gradient(pars, grads)
+        self.assertEqual(grads[isyst], float('inf'))
+
 
 
 class TestSource(unittest.TestCase):
