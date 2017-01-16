@@ -12,6 +12,17 @@
 
 #define R2P 2.5066282746310002  // sqrt(2*pi)
 
+double lfactorial(unsigned long long i) {
+  const double tab[] = { 
+      0.0, 0.0, 0.69314718055994529, 1.791759469228055, 3.1780538303479458, 
+      4.7874917427820458, 6.5792512120101012, 8.5251613610654147, 
+      10.604602902745251, 12.801827480081469 };
+  if (i >= 10)
+    return i*std::log(i) - i + .5*std::log(2*M_PI*i);
+  else
+    return tab[i];
+}
+
 /**
  * Parameterized spectrum: given a set of parmaeters, evaluate the expected
  * spectrum. Given an observed background and priors on parameters, the log
@@ -224,7 +235,7 @@ public:
       // needed since its constant w.r.t. to pars, but helps keep the ll to
       // some resonnable value (otherwise scale as n*k*ln(v))
       _f += (_v > 0) ?
-          _k*std::log(_v) - _v - std::lgamma(_k+1) :
+          _k*std::log(_v) - _v - lfactorial(_k+1) :
           // zero or smaller bin values are not allowed
           -std::numeric_limits<double>::infinity();
       // derivative of poisson w.r.t. to expected bin value
@@ -327,7 +338,7 @@ private:
       const double _v = _spec[_j];
       if (_v <= 0 && _k <= 0) continue;
       _f += (_v > 0) ?
-          _k*std::log(_v) - _v - std::lgamma(_k+1) :
+          _k*std::log(_v) - _v - lfactorial(_k+1) :
           -std::numeric_limits<double>::infinity();
     }
     if (_use_stats) {
