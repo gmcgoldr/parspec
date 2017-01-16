@@ -1,6 +1,7 @@
 import os
 import re
 import math
+import warnings
 
 import numpy as np
 import ROOT
@@ -274,6 +275,8 @@ class ParSpec(object):
             override default scales with these ones
         """
         minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit")
+        # When the LL is halved, 1 sigma is reached
+        minimizer.SetErrorDef(0.5)
         minimizer.SetFunction(self._obj)
 
         if central is None:
@@ -290,19 +293,27 @@ class ParSpec(object):
                 scale = 1
             minimizer.SetVariable(ipar, par, val, scale)
 
-        # When the LL is halved, 1 sigma is reached
-        minimizer.SetErrorDef(0.5)
-
         return minimizer
 
     @staticmethod
     def randomize_parameters(x, central, lows, highs, constraints):
+        known_constraints = set([
+            'normal',
+            'lognormal',
+            'none',
+        ])
+        for c in constraints:
+            if c in known_constraints:
+                continue
+            warnings.warn("unknown constraint %s"%c, RuntimeWarning)
+            break
+
         x = np.array(x)
         central = np.array(central)
         lows = np.array(lows)
         highs = np.array(highs)
         logs = np.array([
-            True if c=='lognormal' else False
+            True if c == 'lognormal' else False
             for c in constraints])
 
         central[logs] = np.log(central[logs])
