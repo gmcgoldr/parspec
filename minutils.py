@@ -1,4 +1,5 @@
 from __future__ import division
+import warnings
 
 import numpy as np
 import ROOT
@@ -12,7 +13,8 @@ def single_fit(
         values=dict(), 
         scales=dict(),
         randomize=False, 
-        nmax=100,
+        max_retries=100,
+        max_calls=1000000,
         tol=1e-2):
     """
     Perform a single fit using TMinuit.
@@ -27,14 +29,13 @@ def single_fit(
         map parameter names to alternate down, up scales
     :param randomize: bool
         randomize initial starting parameter values
-    :param nmax: int
-        maximum TMinuit fails before aborting
     :return: [float], float, ROOT.TMinimizer
         fit values, ll and minimizer object used to fit
     """
     # Do a vanilla fit (don't randomize parameters)
     minimizer = spec.build_minimizer()
     minimizer.SetTolerance(tol)
+    minimizer.SetMaxFunctionCalls(max_calls)
 
     # copy so they can be edited
     lows = np.array(spec.lows)
@@ -75,7 +76,8 @@ def single_fit(
     nfails = 0  # keep track of failed fits
     while not minimizer.Minimize():
         nfails += 1
-        if nfails >= nmax:
+        if nfails >= max_retries:
+            minimizer.Clear()  # note: ROOT leaks memory if not clearing
             raise RuntimeError("Failed minimization")
         if randomize:
             x = spec.randomize_parameters(
@@ -90,7 +92,7 @@ def single_fit(
     return minx, ll, minimizer
 
 
-def global_fit(spec, nfits=10, nmax=100, **kwargs):
+def global_fit(spec, nfits=10, max_retries=100, **kwargs):
     """
     Perform multiple fits and keep the best minimum.
 
@@ -105,7 +107,7 @@ def global_fit(spec, nfits=10, nmax=100, **kwargs):
     """
 
     # Take control of the randomize parameter when passing along to single fit.
-    # Note that nmax ia also not propagated as it is captured by this function.
+    # max_retires isn't propagated as it is captured by this function.
     if 'randomize' in kwargs:
         del kwargs['randomize']
 
@@ -118,18 +120,22 @@ def global_fit(spec, nfits=10, nmax=100, **kwargs):
 
     while npass < nfits:
         try:
-            minx, ll, minimizer = single_fit(spec, randomize=True, **kwargs)
+            minx, ll, minimizer = single_fit(spec, randomize=True, max_retries=1, **kwargs)
             npass += 1  # once it succeeds, count the fit
         except RuntimeError:
             nfails += 1
-            if nfails >= nmax:
+            if nfails >= max_retries:
                 raise RuntimeError("Failed global minimization")
             continue  # if it fails, try again with different randomization
 
         if ll > best_ll:
             best_x = minx
             best_ll = ll
+            if best_min is not None:
+                best_min.Clear()
             best_min = minimizer
+        else:
+            minimizer.Clear()
 
     return best_x, best_ll, best_min
 
@@ -148,8 +154,8 @@ def run_minos(spec, minimizer, pars=list(), verbose=False):
         list of parameters on which to run Minos, or all if list is empty
     :param verbose: bool
         print information about parameter evaluations
-    :return: [float], [float]
-        distance to subtract and add to halve the log likelihood
+    :return: [float], [float], [bool]
+        distance to subtract and add to halve the log likelihood, and success
     """
     if len(pars) == 0:
         pars = spec.pars
@@ -158,6 +164,7 @@ def run_minos(spec, minimizer, pars=list(), verbose=False):
     npars = len(pars)
     fit_down = [0] * npars
     fit_up = [0] * npars
+    success = [True] * npars
 
     # Declare ROOT doubles which minos can write to by reference
     down = ROOT.Double(0)
@@ -165,17 +172,14 @@ def run_minos(spec, minimizer, pars=list(), verbose=False):
 
     for i, par in enumerate(pars):
         ipar = spec.ipar(par)
-        if minimizer.GetMinosError(ipar, down, up):
-            # Note: important to cast the copy the ROOT variable, otherwise
-            # the list will contain a reference to the value, which will change
-            fit_down[i] = float(down)
-            fit_up[i] = float(up)
-        else:
-            warnings.warn("Minos failed on %s" % par, RuntimeWarning)
+        if not minimizer.GetMinosError(ipar, down, up):
+            success[i] = False
+        fit_down[i] = float(down)
+        fit_up[i] = float(up)
         if verbose:
             print('...%s: %+.2e, %+.2e' % (par, float(down), float(up)))
 
-    return fit_down, fit_up
+    return fit_down, fit_up, success
 
 
 def find_minima(spec, nsample=100, tol=1e-2, verbose=False, **kwargs):
@@ -211,7 +215,7 @@ def find_minima(spec, nsample=100, tol=1e-2, verbose=False, **kwargs):
             minx, ll, minimizer = single_fit(
                 spec, 
                 randomize=True if nfails+isample>0 else False, 
-                nmax=1, 
+                max_retries=1, 
                 tol=tol,
                 **kwargs)
             if verbose:
@@ -227,8 +231,12 @@ def find_minima(spec, nsample=100, tol=1e-2, verbose=False, **kwargs):
         lls.append(ll)
 
         if ll > best_ll:
+            if best_min is not None:
+                best_min.Clear()
             best_min = minimizer
             best_ll = ll
+        else:
+            minimizer.Clear()
 
     if verbose:
         print("...failure rate: %.2e" % (nfails/float(nsample+nfails)))
@@ -353,6 +361,8 @@ def profile(
             new_x = minx
         print(val, ll)
         lls.append((val, np.exp(ll)))
+
+    minimizer.Clear()
 
     return np.array(lls[1:])
 
