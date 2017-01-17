@@ -1,29 +1,9 @@
+import math
+
 import numpy as np
 import ROOT
 
 import parspec
-
-
-def estimate_stats(data):
-    # copy into a proper array
-    data = np.array(data)
-    # copy into a strided array, grouping 3 bins at a time
-    data = np.array(np.lib.stride_tricks.as_strided(
-        x=data,
-        shape=(
-            len(data)-3+1,
-            3), 
-        strides=(
-            data.dtype.itemsize,
-            data.dtype.itemsize)))
-    # fit each set of 3 points, using the same x coodrinates
-    x = np.array([-1, 0, 1], dtype=float)
-    m, b = np.polyfit(x, data.T, 1)
-    # compute the projected values given the fit parameters
-    y = m[:, np.newaxis]*x[np.newaxis, :] + b[:, np.newaxis]
-    # the standard deviation of the difference should ressemble statistical
-    # uncertainty
-    return np.std(data-y)
 
 
 class TemplateSource(object):
@@ -63,7 +43,10 @@ class TemplateSource(object):
         :param high: float
             cross section value above nominal which causes 1-sigma penalty
         """
-        self._xsec = (nominal, low, high)
+        self._xsec = (
+            math.log(nominal), 
+            math.log(low),
+            math.log(high))
 
     def use_lumi(self):
         """
@@ -88,13 +71,13 @@ class TemplateSource(object):
         introduced in another source). This parameter is regularized such that
         the loglikelihood is halved when it reaches +/- 1.
 
-        Note: data is given as absolute values, not realtive to nominal.
+        Note: data is given as differences from nominal.
 
         :param name: str
             name of the systematic parameter (can be shared with other sources)
         :param data: [float]
-            values of the spectrum when the systematic parameter takes on a
-            value of +/- 1 sigma (depends on given polarity)
+            difference of the nominal spectrum when the systematic parmeter
+            takes on a value of +/- 1 sigma (depends on polarity)
         :param stats: [float]
             statistical uncertainty on the *difference* of each bin under the
             influence of the systematic shape
@@ -104,8 +87,7 @@ class TemplateSource(object):
         """
         if polarity is not None and polarity not in ['up', 'down']:
             raise ValueError("Unrecognized polarity %s" % polarity)
-        # Get the shifts realtive to nominal
-        data = np.array(data) - self._data
+        data = np.array(data)
         if polarity == 'down':
             data *= -1
 
@@ -117,18 +99,19 @@ class TemplateSource(object):
         spectrum (or re-uses them if they are present in other sources). The
         parameters are not regularized, they are allowed to float.
 
-        Note: data is given as absolute values, not realtive to nominal.
+        Note: data is given as differences from nominal.
 
         :param expr: str
             C++ expression which yields the normalization for the template
         :param data: [float]
-            values of the spectrum when the template expression evaluates to 1
+            difference of the nominal spectrum when the template expression 
+            evaluates to 1
         :param pars: [str]
             names of parameters used in the expression
         :param grads: [str]
             C++ expression which yields the dexpr/dpar for each parameter
         """
-        data = np.array(data) - self._data  # relative to nominal
+        data = np.array(data)
         self._templates.append((expr, data, pars, grads))
             
 
@@ -174,7 +157,10 @@ class TemplateMeasurement(object):
         :param err: float
             +/- uncertainty on luminosity
         """
-        self._lumi = (nominal, nominal-err, nominal+err)
+        self._lumi = (
+            math.log(nominal), 
+            math.log(nominal/(nominal+err)), 
+            math.log(nominal*(nominal+err)))
 
     def prepare(self):
         """
@@ -194,15 +180,21 @@ class TemplateMeasurement(object):
                 # Factor is product of lumi and cross section, need to give 
                 # parameter names and derivatives
                 par_src.set_expression(
-                    'lumi*%s' % xsec_name,
+                    'std::exp(lumi+%s)' % xsec_name,
                     ['lumi', xsec_name],
-                    [xsec_name, 'lumi'])
+                    ['std::exp(lumi+%s)'%xsec_name]*2)
             elif temp_src._lumi:
                 # Factor is just luminosity, derivative is inferred
-                par_src.set_expression('lumi')
+                par_src.set_expression(
+                    'std::exp(lumi)',
+                    ['lumi'],
+                    ['std::exp(lumi)'])
             elif temp_src._xsec:
                 # Factor is just xsec, derivative is inferred
-                par_src.set_expression(xsec_name)
+                par_src.set_expression(
+                    'std::exp(%s)'%xsec_name,
+                    [xsec_name],
+                    ['std::exp(%s)'%xsec_name])
 
             if temp_src._stat_errs:
                 par_src.use_stats(temp_src._stat_errs)
@@ -229,13 +221,17 @@ class TemplateMeasurement(object):
                 builder.set_prior(
                     xsec_name, 
                     *temp_src._xsec, 
-                    constraint='lognormal')
+                    #constraint='lognormal')
+                    constraint='normal')
 
             # Add regularization for systematics (overwrite pervious if the
             # same name is in another source, but doesn't matter)
             for syst in temp_src._systematics:
                 syst_name = 'syst_%s' % syst[0]
-                builder.set_prior(syst_name, 0, -1, 1, constraint='normal')
+                builder.set_prior(
+                    syst_name, 
+                    0, -1, 1, 
+                    constraint='normal')
 
         if uses_lumi:
             if not self._lumi:
@@ -243,7 +239,8 @@ class TemplateMeasurement(object):
             builder.set_prior(
                 'lumi', 
                 *self._lumi,
-                constraint='lognormal')
+                #constraint='lognormal')
+                constraint='normal')
 
         return builder
 

@@ -144,14 +144,14 @@ def build_template_meas(name='example'):
     src_sig.set_xsec(1, 0.95, 1.05)  # cross section constrained to +/-5%
     # Add a template: under the influence of parameter p, a linear slope is
     # added to the signal
-    src_sig.add_template('p', sig*[0.8, 0.9, 1, 1.1, 1.2])
+    src_sig.add_template('p', sig*[-.2, -.1, 0, +.1, +.2])
     # Add highly asymmetric systematic uncertainty which looks a lot like the
     # signal. This is a challenging model to fit.
-    src_sig.add_syst('s1', sig*[0.94, 0.98, 1, 1.02, 1.06], polarity='up')
-    src_sig.add_syst('s1', sig*[0.97, 0.99, 1, 1.01, 1.03], polarity='down')
+    src_sig.add_syst('s1', sig*[-.06, -.02, 0, +.02, +.06], polarity='up')
+    src_sig.add_syst('s1', sig*[-.03, -.01, 0, +.01, +.03], polarity='down')
     # Add another systematic which doesn't look like the signal or the data
     # (should be constrained)
-    src_sig.add_syst('s2', sig*[1.02, 1.01, 1, 1.01, 1.02])
+    src_sig.add_syst('s2', sig*[+.02, +.01, 0, +.01, +.02])
 
     # Add a flat-ish background (different shape from signal)
     bg1 = np.array([1600, 1300, 1000, 1000, 1000], dtype=float)
@@ -160,7 +160,7 @@ def build_template_meas(name='example'):
     src_bg1.use_stats(.1*(10*bg1)**0.5)
     src_bg1.set_xsec(1, 0.8, 1.1)
     # It is also impacted by systematic 2
-    src_bg1.add_syst('s2', bg1*[1.02, 1.01, 1, 1.01, 1.02])
+    src_bg1.add_syst('s2', bg1*[+.02, +.01, 0, +.01, +.02])
 
     # Add a background not impacted by lumi or stats (e.g. data driven)
     bg2 = np.array([1000, 1000, 1000, 1300, 1600], dtype=float)
@@ -278,7 +278,7 @@ def asses_space(meas):
     print("Found %d minima with likelihoods:" % len(lls))
     print(', '.join(["%.3f" % l for l in lls]))
 
-    print("Global minimum is found %.3f%% of the time" % prob)
+    print("Global minimum is found %.3f%% of the time" % (100*prob))
 
     l0 = draw_spectrum(meas, truth, True, label='truth', linestyle='--')
     l1 = draw_spectrum(meas, xs[0], True, label='fit')
@@ -360,7 +360,7 @@ def measure_template(meas):
         for i in range(meas.spec.npars)])
     
     # Measure the confidence intervals with minos profiling
-    fit_down, fit_up = minutils.run_minos(meas.spec, minimizer)
+    fit_down, fit_up, _ = minutils.run_minos(meas.spec, minimizer)
 
     # Get a better estimate for the confidence intervals with MCMC sampling
     mean, mean_down, mean_up, mcmc = \

@@ -271,7 +271,7 @@ class ParSpec(object):
         :param scales: [float]
             override default scales with these ones
         """
-        minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit")
+        minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit2")
         # When the LL is halved, 1 sigma is reached
         minimizer.SetErrorDef(0.5)
         minimizer.SetFunction(self._obj)
