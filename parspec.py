@@ -78,10 +78,21 @@ class ParSpec(object):
         # Note: used internally, don't return as it is mutable
         self._central = tuple(np.array(central, dtype='float64'))
 
+        # Compute spectrum and stats with centrl values
+        x = np.array(self._central)
+        vals = np.zeros(self._ncols, dtype=np.float64)
+        stats = np.zeros(self._ncols, dtype=np.float64)
+        self._obj.Compute(x, vals, stats)
+        # Set as fixed stats in case of fix_stats running mode
+        self._obj.setFixedStats(stats)
+        # Remember those central values
+        self._central_stats = (stats**.5).tolist()
+        self._central_vals = vals.tolist()
+
         lows = np.array(lows)
         highs = np.array(highs)
 
-        # Compute the effective stats with default parameters
+        # Set the stat parameter bounds (they are normalized to variance)
         istats = [
             i for i in range(self._npars) 
             if self._pars[i].startswith('stat')]
@@ -146,6 +157,16 @@ class ParSpec(object):
         return self._central
 
     @property
+    def central_vals(self):
+        """Return the spectrum computed with central values"""
+        return self._central_vals
+
+    @property
+    def central_stats(self):
+        """Return the spectrum bin stats with central values"""
+        return self._central_stats
+
+    @property
     def lows(self):
         """Return list of -1 sigma parameter values"""
         return self._lows
@@ -169,6 +190,10 @@ class ParSpec(object):
     def unconstrained(self):
         """Return list of unconstrained parameter names"""
         return self._unconstrained
+
+    def fixstats(self, fix=True):
+        """The expected bin variances won't scale with row factors"""
+        self._obj.setFixStats(fix)
 
     def ipar(self, par):
         """
@@ -271,7 +296,7 @@ class ParSpec(object):
         :param scales: [float]
             override default scales with these ones
         """
-        minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit2")
+        minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit")
         # When the LL is halved, 1 sigma is reached
         minimizer.SetErrorDef(0.5)
         minimizer.SetFunction(self._obj)

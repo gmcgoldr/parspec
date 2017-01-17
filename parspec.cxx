@@ -10,8 +10,6 @@
 
 #include <Math/IFunction.h>
 
-#define R2P 2.5066282746310002  // sqrt(2*pi)
-
 /**
  * Parameterized spectrum: given a set of parmaeters, evaluate the expected
  * spectrum. Given an observed background and priors on parameters, the log
@@ -47,6 +45,8 @@ private:
   const double* _source_stats;  // array of bin variance for each source
   // if no stat values are given, _istats == -1, disable calculations
   const bool _use_stats;
+  bool _fix_stats;
+  double _fixed_stats[_ncols];
   // return negative log likelihood
   bool _negative;
   // the spectral data as computed from the model
@@ -72,6 +72,8 @@ private:
     _sources = (double*)((char*)_memory+i); i += _nrows*_ncols*sizeof(double)/sizeof(char);
     _source_stats = (double*)((char*)_memory+i); i += _nrows*_ncols*sizeof(double)/sizeof(char);
     assert(i == _nbytes/sizeof(char) && "Didn't account for all written data");
+    // initialize the on stack fixed statistics
+    std::memset(_fixed_stats, 0, _ncols*sizeof(double));
     // initialize the on stack spectral data
     std::memset(_data, 0, _ncols*sizeof(double));
   }
@@ -102,6 +104,7 @@ public:
         _nrows*_ncols*sizeof(double) // source_stats
       ),
       _use_stats(_istats != (unsigned)-1),
+      _fix_stats(false),
       _negative(true) {
     // set memory from hard coded path to binary file
     _setMemory();
@@ -127,16 +130,28 @@ public:
   }
 
   /**
+    * @brief set the fixed stat. variances
+    *
+    * @param data pointer to memory containing bin values.
+    */
+  virtual void setFixedStats(const double* variances) {
+    std::memcpy(_fixed_stats, variances, _ncols*sizeof(double));
+  }
+
+  virtual void setFixStats(bool fix) { _fix_stats = fix; }
+  virtual bool getFixStats() const { return _fix_stats; }
+
+  /**
     * @brief set the data values used to computed the likelihood
     *
-    * @param data pointer to memory containing data bin values.
+    * @param data pointer to memory containing bin values.
     */
   virtual void setData(const double* data) {
     std::memcpy(_data, data, _ncols*sizeof(double));
   }
 
-  virtual void setNLL() { _negative = true; }
-  virtual void setLL() { _negative = false; }
+  virtual void setNLL(bool nll) { _negative = nll; }
+  virtual bool getNLL() const { return _negative; }
 
   /** 
     * @brief compute the spectrum for the given parameters 
@@ -163,7 +178,9 @@ public:
     // modify computed spectrum with bin-by-bin fluctuations
     if (_use_stats)
       for (unsigned _j = 0; _j < _ncols; _j++)
-        _spec[_j] += _stat_pars[_j] * std::pow(_stats[_j], .5);
+        _spec[_j] += 
+            _stat_pars[_j] * 
+            std::pow(_fix_stats ? _fixed_stats[_j] : _stats[_j], .5);
   }
 
   virtual unsigned int NDim() const { return _ndims; }
@@ -202,14 +219,14 @@ public:
     for (unsigned _i = 0; _i < _nrows; _i++) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
         _spec[_j] += _factors[_i] * _sources[_i*_ncols+_j];
-        _stats[_j] += std::pow(_factors[_i],2) * _source_stats[_i*_ncols+_j];
+        if (!_fix_stats) _stats[_j] += std::pow(_factors[_i],2) * _source_stats[_i*_ncols+_j];
         // iterate through the parameters affecting this contribution
         for (unsigned _k = 0; _k < _rownpars[_i]; _k++) {
           const unsigned _ipar = _rowpars[_ipars+_k];
           // _j col w.r.t. to _ipar
           _spec_grads[_ipar*_ncols+_j] += 
               _pargrads[_ipars+_k] * _sources[_i*_ncols+_j];
-          _stat_grads[_ipar*_ncols+_j] += 
+          if (!_fix_stats) _stat_grads[_ipar*_ncols+_j] += 
               _pargrads[_ipars+_k] * 2 * _factors[_i] * _source_stats[_i*_ncols+_j];
         }
       }
@@ -220,11 +237,14 @@ public:
     // Add per column corrections to the spectrum
     if (_use_stats) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
-        _spec[_j] += _stat_pars[_j] * std::pow(_stats[_j], .5);
+        _spec[_j] += 
+            _stat_pars[_j] * 
+            std::pow(_fix_stats ? _fixed_stats[_j] : _stats[_j], .5);
         // take note of how stat par _j affects bin _j
-        _spec_grads[(_istats+_j)*_ncols+_j] += std::pow(_stats[_j], .5);
+        _spec_grads[(_istats+_j)*_ncols+_j] += 
+            std::pow(_fix_stats ? _fixed_stats[_j] : _stats[_j], .5);
         // further consider how each parameter affects bin _j through _stat[_j]
-        for (unsigned _ipar = 0; _ipar < _ndims; _ipar++)
+        if (!_fix_stats) for (unsigned _ipar = 0; _ipar < _ndims; _ipar++)
           _spec_grads[_ipar*_ncols+_j] += 
               _stat_pars[_j] * 
               .5*std::pow(_stats[_j], -.5) * 
