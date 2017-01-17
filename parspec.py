@@ -46,6 +46,7 @@ class ParSpec(object):
             lows, 
             highs, 
             constraints,
+            stats,
             obj):
         """
         Wrapper for a compile parameterized spectrum object. All interals are
@@ -65,6 +66,8 @@ class ParSpec(object):
             +1 sigma value of each parameter
         :param constraints: [str]
             type of constraint for each prior
+        :param stats: [float]
+            statistical variance for each bin (MC stats)
         :param obj: ROOT.name
             ROOT wrapper for the compiled C++ spectrum object
         """
@@ -75,41 +78,19 @@ class ParSpec(object):
         self._ncols = ncols
         self._obj = obj
 
+        # set the stats and store
+        stats = np.array(stats, dtype='float64')
+        self._obj.setBinVars(stats)
+        self._stats = tuple(stats.tolist())
+
         # Note: used internally, don't return as it is mutable
         self._central = tuple(np.array(central, dtype='float64'))
 
-        # Compute spectrum and stats with centrl values
-        x = np.array(self._central)
-        vals = np.zeros(self._ncols, dtype=np.float64)
-        stats = np.zeros(self._ncols, dtype=np.float64)
-        self._obj.Compute(x, vals, stats)
-        # Set as fixed stats in case of fix_stats running mode
-        self._obj.setFixedStats(stats)
-        # Remember those central values
-        self._central_stats = (stats**.5).tolist()
-        self._central_vals = vals.tolist()
-
-        lows = np.array(lows)
-        highs = np.array(highs)
-
-        # Set the stat parameter bounds (they are normalized to variance)
-        istats = [
-            i for i in range(self._npars) 
-            if self._pars[i].startswith('stat')]
-        lows[istats] = -1
-        highs[istats] = +1
-
-        self._scales = tuple(0.5*(highs-lows))
+        self._scales = tuple(0.5*(np.asarray(highs)-np.asarray(lows)))
         self._lows = tuple(lows)
         self._highs = tuple(highs)
 
-        self._constraints = list(constraints)
-        # stat parameters get normal constraints (not explicit in build)
-        for ipar in istats:
-            self._constraints[ipar] = 'normal'
-        # finalize the list
-        self._contraints = tuple(constraints)
-
+        self._constraints = tuple(constraints)
         self._unconstrained = tuple(
             [p for i, p in enumerate(self._pars) 
             if self._constraints[i] == 'none'])
@@ -157,14 +138,9 @@ class ParSpec(object):
         return self._central
 
     @property
-    def central_vals(self):
-        """Return the spectrum computed with central values"""
-        return self._central_vals
-
-    @property
-    def central_stats(self):
-        """Return the spectrum bin stats with central values"""
-        return self._central_stats
+    def stats(self):
+        """Return the spectrum bin statistical variance"""
+        return self._stats
 
     @property
     def lows(self):
@@ -190,10 +166,6 @@ class ParSpec(object):
     def unconstrained(self):
         """Return list of unconstrained parameter names"""
         return self._unconstrained
-
-    def fixstats(self, fix=True):
-        """The expected bin variances won't scale with row factors"""
-        self._obj.setFixStats(fix)
 
     def ipar(self, par):
         """
@@ -236,22 +208,8 @@ class ParSpec(object):
         """
         x = self._prep_pars(x)
         vals = np.zeros(self._ncols, dtype=np.float64)
-        stats = np.zeros(self._ncols, dtype=np.float64)
-        self._obj.Compute(x, vals, stats)
+        self._obj.Compute(x, vals)
         return vals
-
-    def specstats(self, x):
-        """
-        Compute the spectrum and statistics for the given parameters.
-
-        :param x: [float]
-            list of parameter values
-        """
-        x = self._prep_pars(x)
-        vals = np.zeros(self._ncols, dtype=np.float64)
-        stats = np.zeros(self._ncols, dtype=np.float64)
-        self._obj.Compute(x, vals, stats)
-        return vals, stats**0.5
 
     def nll(self, x):
         """
@@ -296,7 +254,7 @@ class ParSpec(object):
         :param scales: [float]
             override default scales with these ones
         """
-        minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit")
+        minimizer = ROOT.Math.Factory.CreateMinimizer("Minuit2")
         # When the LL is halved, 1 sigma is reached
         minimizer.SetErrorDef(0.5)
         minimizer.SetFunction(self._obj)
@@ -487,9 +445,7 @@ class Source(object):
         :param err: [float]
             statistical error on each bin
         """
-        if len(errs) != len(self._stats):
-            raise ValueError("Provided errors don't match data")
-        self._stats = np.array(errs, dtype='float64')
+        self._stats[:] = errs
 
 
 class SpecBuilder(object):
@@ -524,9 +480,6 @@ class SpecBuilder(object):
         # Number of columns determined from first source added
         self._ncols = None
 
-        # Remember the stat parameter names explicitey
-        self._stat_pars = list()
-
         # List of additional regularization expressions and gradients
         self._regularizations = list()
 
@@ -549,14 +502,6 @@ class SpecBuilder(object):
         self._sources.append(source)
         # Keep the set of all parameter names
         self._pars |= set(source._pars)
-
-        if np.any(source._stats) and not self._stat_pars:
-            # Setup parameter names for each bin uncertainty. Make sure
-            # they sort alphanumerically, so pad with enough zeros
-            nzeros = str(int(math.log10(self._ncols))+1)
-            self._stat_pars = [
-                ('stat%0'+nzeros+'d') % i for i in range(self._ncols)]
-            self._pars |= set(self._stat_pars)
 
     def set_prior(self, name, central, low=None, high=None, constraint='none'):
         """
@@ -673,8 +618,6 @@ class SpecBuilder(object):
         code = code.replace('__NROWS__', str(len(self._sources)))
         code = code.replace('__NCOLS__', str(self._ncols))
         code = code.replace('__NDIMS__', str(len(pars)))
-        code = code.replace('__ISTATS__', 
-            str(ipars[self._stat_pars[0]]) if self._stat_pars else '-1')
         code = code.replace('__FACTORS__', '\n%s\n' % code_factors)
         code = code.replace('__PARGRADS__', '\n%s\n' % code_pargrads)
         code = code.replace('__ROWNPARS__', '\n%s\n' % code_rownpars)
@@ -732,11 +675,11 @@ class SpecBuilder(object):
         sources_data = [[v for v in s._data] for s in self._sources]
         binary_data.write(np.array(sources_data, dtype='float64'))
 
+        binary_data.close()
+
         # Statistics for each data bin (statistical uncertainty squared)
         source_stats_data = [[v**2 for v in s._stats] for s in self._sources]
-        binary_data.write(np.array(source_stats_data, dtype='float64'))
-
-        binary_data.close()
+        stats = np.sum(source_stats_data, axis=0)
 
         # Write out the generated code
         code_file = 'comp_parspec_%s.cxx' % self.name
@@ -798,4 +741,5 @@ class SpecBuilder(object):
             lows,
             highs,
             constraints,
+            stats,
             constructor())

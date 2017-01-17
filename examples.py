@@ -465,7 +465,6 @@ if __name__ == '__main__':
 
     print("Building measurement...")
     meas = build_template_meas()
-    meas.spec.fixstats()
 
     print("Assessing minima...")
     asses_space(meas)
