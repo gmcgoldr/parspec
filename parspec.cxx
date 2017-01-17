@@ -12,17 +12,6 @@
 
 #define R2P 2.5066282746310002  // sqrt(2*pi)
 
-double lfactorial(unsigned long long i) {
-  const double tab[] = { 
-      0.0, 0.0, 0.69314718055994529, 1.791759469228055, 3.1780538303479458, 
-      4.7874917427820458, 6.5792512120101012, 8.5251613610654147, 
-      10.604602902745251, 12.801827480081469 };
-  if (i >= 10)
-    return i*std::log(i) - i + .5*std::log(2*M_PI*i);
-  else
-    return tab[i];
-}
-
 /**
  * Parameterized spectrum: given a set of parmaeters, evaluate the expected
  * spectrum. Given an observed background and priors on parameters, the log
@@ -51,7 +40,7 @@ private:
   const size_t _nbytes;
   // pointers to relevant parts of the memory
   const double* _prior0;  // prior central values
-  const double* _priorDown;  // prior down scale
+  const double* _priorDown;  // prior down scale (variance)
   const double* _priorUp;  // prior up scale
   const int* _priorType;  // prior type (e.g. normal)
   const double* _sources;  // array of bin values for each source
@@ -85,6 +74,18 @@ private:
     assert(i == _nbytes/sizeof(char) && "Didn't account for all written data");
     // initialize the on stack spectral data
     std::memset(_data, 0, _ncols*sizeof(double));
+  }
+
+  // note: keep in class to keep in namespace
+  static double _lfactorial(unsigned long long _i) {
+    const double _tab[] = { 
+        0.0, 0.0, 0.69314718055994529, 1.791759469228055, 3.1780538303479458, 
+        4.7874917427820458, 6.5792512120101012, 8.5251613610654147, 
+        10.604602902745251, 12.801827480081469 };
+    if (_i >= 10)
+      return _i*std::log(_i) - _i + .5*std::log(2*M_PI*_i);
+    else
+      return _tab[_i];
   }
 
   // disable assignment operator
@@ -144,26 +145,25 @@ public:
     * @param _spec pointer to memory where to store bin values
     * @param _stats pointer to memory where to store bin stat. variance
     */
-  virtual void Compute(const double* _x, double* _spec, double* _stats=0) const {
+  virtual void Compute(const double* _x, double* _spec, double* _stats) const {
     // pointer to the chunk of parameters where stat. pars are found
     const double* _stat_pars = _use_stats ? _x+_istats : 0;
     // prepare the output memory for summing contents into
     std::memset(_spec, 0, _ncols*sizeof(double));
-    if (_stats) std::memset(_stats, 0, _ncols*sizeof(double));
+    std::memset(_stats, 0, _ncols*sizeof(double));
     // Compute factors for each source
     const double _factors[] = { __FACTORS__ };
     // Compute spectrum without gradients
     for (unsigned _i = 0; _i < _nrows; _i++) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
         _spec[_j] += _factors[_i] * _sources[_i*_ncols+_j];
-        if (_stats) _stats[_j] += 
-              std::pow(_factors[_i],2) * _source_stats[_i*_ncols+_j];
+        _stats[_j] += std::pow(_factors[_i],2) * _source_stats[_i*_ncols+_j];
       }
     }
     // modify computed spectrum with bin-by-bin fluctuations
     if (_use_stats)
       for (unsigned _j = 0; _j < _ncols; _j++)
-        _spec[_j] += _stat_pars[_j];
+        _spec[_j] += _stat_pars[_j] * std::pow(_stats[_j], .5);
   }
 
   virtual unsigned int NDim() const { return _ndims; }
@@ -220,9 +220,15 @@ public:
     // Add per column corrections to the spectrum
     if (_use_stats) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
-        _spec[_j] += _stat_pars[_j];
-        // take note of house stat par _j affects bin _j
-        _spec_grads[(_istats+_j)*_ncols+_j] += 1;
+        _spec[_j] += _stat_pars[_j] * std::pow(_stats[_j], .5);
+        // take note of how stat par _j affects bin _j
+        _spec_grads[(_istats+_j)*_ncols+_j] += std::pow(_stats[_j], .5);
+        // further consider how each parameter affects bin _j through _stat[_j]
+        for (unsigned _ipar = 0; _ipar < _ndims; _ipar++)
+          _spec_grads[_ipar*_ncols+_j] += 
+              _stat_pars[_j] * 
+              .5*std::pow(_stats[_j], -.5) * 
+              _stat_grads[_ipar*_ncols+_j];
       } 
     }
 
@@ -235,7 +241,7 @@ public:
       // needed since its constant w.r.t. to pars, but helps keep the ll to
       // some resonnable value (otherwise scale as n*k*ln(v))
       _f += (_v > 0) ?
-          _k*std::log(_v) - _v - lfactorial(_k+1) :
+          _k*std::log(_v) - _v - _lfactorial(_k+1) :
           // zero or smaller bin values are not allowed
           -std::numeric_limits<double>::infinity();
       // derivative of poisson w.r.t. to expected bin value
@@ -250,18 +256,11 @@ public:
     if (_use_stats) {
       // regularize the statistical shifts using the computed bin stat. variances
       for (unsigned _j = 0; _j < _ncols; _j++) {
-        const double _s = _x[_istats+_j];  // shift from nominal
-        const double _v = _stats[_j];  // variance for the bin
-        if (_v <= 1) continue;  // don't bother for small variance
-        // normal ll term, but include normalization which is impacted by the
-        // variance, which is impacted by parameters
-        _f += -0.5*std::pow(_s,2)/_v - std::log(R2P*std::sqrt(_v));
-        // change of ll w.r.t. variance (pars impact variance)
-        const double dlldv = 0.5*std::pow(_s,2)/std::pow(_v,2) - .5/_v;
-        for (unsigned _i = 0; _i < _ndims; _i++)
-          _df[_i] += _stat_grads[_i*_ncols+_j] * dlldv;
+        const double _s = _stat_pars[_j];  // shift from nominal
+        // stat pars are in units of sigma
+        _f += -0.5*std::pow(_s,2);
         // change of ll w.r.t. to the actual bin shift
-        const double dllds = -_s/_v;
+        const double dllds = -_s;
         _df[_istats+_j] += dllds;
       }
     }
@@ -274,6 +273,7 @@ public:
         break;
       case _PNORMAL:
         // ll contribution from prior on parameter _i
+        // note: priorUp/Down are squared (variance, not sigma)
         _f += 
             // How far this parameter is from its nominal value
             -0.5 * std::pow(_x[_i]-_prior0[_i],2) / 
@@ -329,6 +329,7 @@ private:
   }
 
   virtual double DoEval(const double* _x) const {
+    const double* _stat_pars = _use_stats ? _x+_istats : 0;
     double _f = 0;
     double _spec[_ncols] = { 0 };
     double _stats[_ncols] = { 0 };
@@ -338,15 +339,13 @@ private:
       const double _v = _spec[_j];
       if (_v <= 0 && _k <= 0) continue;
       _f += (_v > 0) ?
-          _k*std::log(_v) - _v - lfactorial(_k+1) :
+          _k*std::log(_v) - _v - _lfactorial(_k+1) :
           -std::numeric_limits<double>::infinity();
     }
     if (_use_stats) {
       for (unsigned _j = 0; _j < _ncols; _j++) {
-        const double _s = _x[_istats+_j];
-        const double _v = _stats[_j];
-        if (_v <= 1) continue;
-        _f += -0.5*std::pow(_s,2)/_v - std::log(R2P*std::sqrt(_v));
+        const double _s = _stat_pars[_j];
+        _f += -0.5*std::pow(_s,2);
       }
     }
     for (unsigned _i = 0; _i < _ndims; _i++) {

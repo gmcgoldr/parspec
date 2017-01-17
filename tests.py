@@ -11,8 +11,23 @@ from parspec import Source
 from parspec import ParSpec
 
 
+def logFactorial(i):
+    tab = [
+        0.0, 0.0, 0.69314718055994529, 1.791759469228055, 3.1780538303479458, 
+        4.7874917427820458, 6.5792512120101012, 8.5251613610654147, 
+        10.604602902745251, 12.801827480081469];
+    i = int(i)
+    if i >= 10:
+      return i*math.log(i) - i + .5*math.log(2*math.pi*i)
+    else:
+      return tab[i]
+
+
 def logPoisson(k, v):
-    return k*np.log(v) - v - np.array(list(map(math.lgamma, k+1)))
+    try:
+        return k*np.log(v) - v - np.array(list(map(logFactorial, k+1)))
+    except TypeError:
+        return k*np.log(v) - v - logFactorial(k+1)
 
 
 class TestParSpec(unittest.TestCase):
@@ -200,25 +215,15 @@ class TestParSpec(unittest.TestCase):
     def test_stat_pars(self):
         """Check that statistical uncertainties are appropriate"""
         stat_pars = [p for p in self.spec.pars if p.startswith('stat')]
-        # The signal source bin counts
-        contents = self.builder._sources[0]._data
         for par in stat_pars:
-            ibin = int(par[len('stat'):])
-            # Note that the stats were scaled to look like the final source
-            # bin counts had been scaled by 1/2
-            n = 2*contents[ibin]
-            rel_err = n**0.5 / n
             self.assertAlmostEqual(
                 self.spec.parinfo(par)['central'], 0)
             self.assertAlmostEqual(
-                self.spec.parinfo(par)['low'],
-                -contents[ibin]*rel_err)
+                self.spec.parinfo(par)['low'], -1)
             self.assertAlmostEqual(
-                self.spec.parinfo(par)['high'],
-                contents[ibin]*rel_err)
+                self.spec.parinfo(par)['high'], +1)
             self.assertAlmostEqual(
-                self.spec.scales[self.spec.ipar(par)],
-                contents[ibin]*rel_err)
+                self.spec.scales[self.spec.ipar(par)], 1)
 
     def test_spec_nom(self):
         """Check nominal spectrum is as expected"""
@@ -231,6 +236,17 @@ class TestParSpec(unittest.TestCase):
         pars = list(self.spec.central)
         comp = self.spec(pars)
         np.testing.assert_array_almost_equal(true, comp)
+
+    def test_spec_nom_stats(self):
+        """Check nominal spectrum stats are as expected"""
+        # Nominal spectrum is source + background
+        true = (
+            self.builder._sources[0]._stats
+        )
+        # Should get the same spectrum using central parameters
+        pars = list(self.spec.central)
+        _, stats = self.spec.specstats(pars)
+        np.testing.assert_array_almost_equal(true, stats)
 
     def test_spec_xsec(self):
         """Check spectrum with varied x-section is as expected"""
@@ -272,6 +288,18 @@ class TestParSpec(unittest.TestCase):
         comp = self.spec(pars)
         np.testing.assert_array_almost_equal(true, comp)
 
+    def test_spec_syst1_up_stats(self):
+        """Check spectrum with positive systematic stats are as expected"""
+        # Positive value for syst1
+        true = (
+            (self.builder._sources[0]._stats)**2 +
+            (0.2 * self.builder._sources[1]._stats)**2
+        )**.5
+        pars = list(self.spec.central)
+        pars[self.spec.ipar('syst1')] = 0.2
+        _, stats = self.spec.specstats(pars)
+        np.testing.assert_array_almost_equal(true, stats)
+
     def test_spec_syst1_down(self):
         """Check spectrum with negative systematic is as expected"""
         # Negative value for syst1
@@ -285,17 +313,52 @@ class TestParSpec(unittest.TestCase):
         comp = self.spec(pars)
         np.testing.assert_array_almost_equal(true, comp)
 
+    def test_spec_syst1_down_stats(self):
+        """Check spectrum with negative systematic stats are as expected"""
+        # Negative value for syst1
+        true = (
+            (self.builder._sources[0]._stats)**2 + 
+            (-0.3 * self.builder._sources[2]._stats)**2
+        )**.5
+        pars = list(self.spec.central)
+        pars[self.spec.ipar('syst1')] = -0.3
+        _, stats = self.spec.specstats(pars)
+        np.testing.assert_array_almost_equal(true, stats)
+
     def test_spec_stats(self):
         """Check spectrum with varied statistics is as expected"""
         # Fluctuate bin statistics
         true = (
             self.builder._sources[0]._data +
-            self.builder._sources[5]._data +
-            np.array([30, 0, -15, 0, 0])
+            self.builder._sources[5]._data
         )
+        stats = self.builder._sources[0]._stats[0]
+        true[0] += self.builder._sources[0]._stats[0]
+        true[2] += -.5*self.builder._sources[0]._stats[2]
         pars = list(self.spec.central)
-        pars[self.spec.ipar('stat0')] = 30
-        pars[self.spec.ipar('stat2')] = -15
+        pars[self.spec.ipar('stat0')] = 1
+        pars[self.spec.ipar('stat2')] = -.5
+        comp = self.spec(pars)
+        np.testing.assert_array_almost_equal(true, comp)
+
+    def test_spec_stats_systs(self):
+        """Check spectrum with varied statistics is as expected with systs"""
+        # Fluctuate bin statistics
+        true = (
+            self.builder._sources[0]._data +
+            self.builder._sources[5]._data +
+            -0.3 * self.builder._sources[2]._data
+        )
+        stats = (
+            (self.builder._sources[0]._stats)**2 + 
+            (-0.3 * self.builder._sources[2]._stats)**2
+        )**.5
+        true[0] += stats[0]
+        true[2] += -.5*stats[2]
+        pars = list(self.spec.central)
+        pars[self.spec.ipar('stat0')] = 1
+        pars[self.spec.ipar('stat2')] = -.5
+        pars[self.spec.ipar('syst1')] = -0.3
         comp = self.spec(pars)
         np.testing.assert_array_almost_equal(true, comp)
 
@@ -306,8 +369,8 @@ class TestParSpec(unittest.TestCase):
         pars[self.spec.ipar('lumi')] = 0.8
         pars[self.spec.ipar('syst1')] = +0.2
         pars[self.spec.ipar('syst2')] = -0.3
-        pars[self.spec.ipar('stat0')] = 30
-        pars[self.spec.ipar('stat2')] = -15
+        pars[self.spec.ipar('stat0')] = +1.2
+        pars[self.spec.ipar('stat2')] = -2.0
         pars[self.spec.ipar('p')] = 1.2
 
     def test_spec_varied(self):
@@ -315,8 +378,6 @@ class TestParSpec(unittest.TestCase):
         true = (
             # Add source with lumi=0.8 and xsec=1.2
             0.8*1.2 * self.builder._sources[0]._data +
-            # Add statitiscal fluctuations on bins 0 and 2
-            np.array([30, 0, -15, 0, 0]) + 
             # Add a 0.2 contribution from syst1
             0.8*1.2 * +0.2 * self.builder._sources[1]._data +
             # Add a -0.3 contribution from syst2
@@ -329,7 +390,10 @@ class TestParSpec(unittest.TestCase):
         )
         pars = list(self.spec.central)
         self.move_pars(pars)
-        comp = self.spec(pars)
+        comp, stats = self.spec.specstats(pars)
+        # apply stat offset based on computed variance
+        true[0] += +1.2 * stats[0]
+        true[2] += -2.0 * stats[2]
         np.testing.assert_array_almost_equal(true, comp)
 
     def test_stats_varied(self):
@@ -352,10 +416,9 @@ class TestParSpec(unittest.TestCase):
         pars = list(self.spec.central)
         nominal, stats = self.spec.specstats(pars)
         self.spec.set_data(nominal)  # nominal data
-        # event with nominal, ll penalty from poisson and stat normalization
+        # event with nominal, ll penalty from poisson normalization
         ll = 0  # log likelihood
         ll += np.sum(logPoisson(nominal, nominal))
-        ll -= np.sum(np.log((2*math.pi)**.5 * stats))
         self.assertAlmostEqual(ll, self.spec.ll(pars))
 
     def test_ll_stats(self):
@@ -368,7 +431,6 @@ class TestParSpec(unittest.TestCase):
         data[2] *= 0.5
         ll = 0  # log likelihood
         ll += np.sum(logPoisson(data, nominal))
-        ll -= np.sum(np.log((2*math.pi)**.5 * stats))
         # Set the fluctuated data, and check the log likelihood to nominal
         self.spec.set_data(data)
         self.assertAlmostEqual(ll/self.spec.ll(pars), 1)
@@ -381,25 +443,26 @@ class TestParSpec(unittest.TestCase):
         pars = np.copy(centre)
         self.move_pars(pars)
         # Data includes the shifts, so penalty will be only due to priors
-        data, stats = self.spec.specstats(pars)
+        data = self.spec(pars)
         self.spec.set_data(data)
         ll = 0
         ll += np.sum(logPoisson(data, data))
-        ll -= np.sum(np.log((2*math.pi)**.5 * stats))
-        for par in self.spec.pars:
+        for ipar, par in enumerate(self.spec.pars):
+            if not par.startswith('stat'):
+                continue
+            ll += -0.5 * (pars[ipar])**2
+        for ipar, par in enumerate(self.spec.pars):
             # Don't regularize free parameters
             if par in self.spec.unconstrained:
                 continue
-            ipar = self.spec.ipar(par)
+            # Already took care of stats
+            if par.startswith('stat'):
+                continue
             # Scale is parameter value at 1 sigma, so need to subtract centre
             if pars[ipar] >= centre[ipar]:
                 bound = self.spec.parinfo(par)['high']
             else:
                 bound = self.spec.parinfo(par)['low']
-            # Statistical parameters bounds change with factors
-            if par.startswith('stat'):
-                istat = int(par[4:])
-                bound = stats[istat]
             prior = self.builder._priors.get(par, None)
             if prior is None or prior['constraint'] == 'normal':
                 ll += -0.5 * \
@@ -425,7 +488,6 @@ class TestParSpec(unittest.TestCase):
         varied, stats = self.spec.specstats(pars)  # nominal expectation (with shifts)
         ll = 0
         ll += np.sum(logPoisson(data, varied))
-        ll -= np.sum(np.log((2*math.pi)**.5 * stats))
         ll += -0.5 * (1.2-1)**2 / (self.spec.parinfo('xsec_sig')['high']-1)**2
         # Add custom regularizationonce more
         ll += (pars[self.spec.ipar('p')]-pars[self.spec.ipar('syst1')])**2

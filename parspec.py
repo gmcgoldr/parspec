@@ -85,12 +85,8 @@ class ParSpec(object):
         istats = [
             i for i in range(self._npars) 
             if self._pars[i].startswith('stat')]
-        x = np.array(self._central)
-        vals = np.zeros(self._ncols, dtype=np.float64)
-        stats = np.zeros(self._ncols, dtype=np.float64)
-        self._obj.Compute(x, vals, stats)
-        lows[istats] = -stats**0.5
-        highs[istats] = stats**0.5
+        lows[istats] = -1
+        highs[istats] = +1
 
         self._scales = tuple(0.5*(highs-lows))
         self._lows = tuple(lows)
@@ -215,7 +211,8 @@ class ParSpec(object):
         """
         x = self._prep_pars(x)
         vals = np.zeros(self._ncols, dtype=np.float64)
-        self._obj.Compute(x, vals)
+        stats = np.zeros(self._ncols, dtype=np.float64)
+        self._obj.Compute(x, vals, stats)
         return vals
 
     def specstats(self, x):
@@ -297,13 +294,8 @@ class ParSpec(object):
 
     @staticmethod
     def randomize_parameters(x, central, lows, highs, constraints):
-        known_constraints = set([
-            'normal',
-            'lognormal',
-            'none',
-        ])
         for c in constraints:
-            if c in known_constraints:
+            if c in SpecBuilder.constraints:
                 continue
             warnings.warn("unknown constraint %s"%c, RuntimeWarning)
             break
